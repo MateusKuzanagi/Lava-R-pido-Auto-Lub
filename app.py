@@ -1,5 +1,5 @@
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash, send_file
-import sqlite3
+import psycopg2
 from datetime import datetime
 import os
 from io import BytesIO
@@ -8,43 +8,50 @@ from reportlab.lib.pagesizes import letter
 
 app = Flask(__name__)
 app.secret_key = 'lava_rapido_secret_key_autolub'
-BANCO_DADOS = "LavaRapidoAutoLub.db"
+
+# SUA URL DE CONEXÃO DO SUPABASE
+SUPABASE_URL = "postgresql://postgres:141252363aA@@db.snzgodvyxzvoeihlwtsc.supabase.co:5432/postgres"
+
+def get_db_connection():
+    return psycopg2.connect(SUPABASE_URL)
 
 def init_db():
-    conexao = sqlite3.connect(BANCO_DADOS, timeout=30)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID SERIAL PRIMARY KEY, Nome TEXT UNIQUE, Senha TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID SERIAL PRIMARY KEY, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
     
-    colunas_novas_clientes = ["ModeloMoto", "AnoMoto", "KM", "KMEntrada", "KMSaida", "DataEntrada", "DataSaida", "Placa"]
+    colunas_novas_clientes = ["KMEntrada", "KMSaida", "DataEntrada", "DataSaida"]
     for col in colunas_novas_clientes:
-        try: cursor.execute(f"ALTER TABLE Clientes ADD COLUMN {col} TEXT")
-        except sqlite3.OperationalError: pass
+        try: 
+            cursor.execute(f"ALTER TABLE Clientes ADD COLUMN IF NOT EXISTS {col} TEXT")
+            conexao.commit()
+        except Exception: 
+            conexao.rollback()
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS Vendas(ID INTEGER PRIMARY KEY AUTOINCREMENT, ClienteID INTEGER, Servico TEXT, ValorTotal REAL, ValorPago REAL, DataCompra TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS Vendas(ID SERIAL PRIMARY KEY, ClienteID INTEGER, Servico TEXT, ValorTotal REAL, ValorPago REAL, DataCompra TEXT)")
     
     colunas_novas_vendas = ["FormaPagamento", "Observacao", "CustoInsumos"]
     for col in colunas_novas_vendas:
-        try: cursor.execute(f"ALTER TABLE Vendas ADD COLUMN {col} TEXT")
-        except sqlite3.OperationalError: pass
+        try: 
+            cursor.execute(f"ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS {col} TEXT")
+            conexao.commit()
+        except Exception: 
+            conexao.rollback()
 
     cursor.execute("CREATE TABLE IF NOT EXISTS Produtos(ID TEXT PRIMARY KEY, NomeProduto TEXT, Descricao TEXT, Preco REAL, QtdEstoque REAL DEFAULT 0.0, UnidadeMedida TEXT DEFAULT 'un', CustoCompra REAL DEFAULT 0.0)")
-    
-    colunas_novas_produtos = ["QtdEstoque", "UnidadeMedida", "CustoCompra"]
-    for col in colunas_novas_produtos:
-        try: cursor.execute(f"ALTER TABLE Produtos ADD COLUMN {col} TEXT")
-        except sqlite3.OperationalError: pass
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS Despesas(ID INTEGER PRIMARY KEY AUTOINCREMENT, Descricao TEXT, Categoria TEXT, Valor REAL, DataDespesa TEXT, Observacao TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS Despesas(ID SERIAL PRIMARY KEY, Descricao TEXT, Categoria TEXT, Valor REAL, DataDespesa TEXT, Observacao TEXT)")
 
     usuarios_padrao = [('admin', '123'), ('maironxd', '14125'), ('luana', '14125'), ('josue', '123')]
     for user, senha in usuarios_padrao:
-        cursor.execute("SELECT * FROM Usuarios WHERE Nome=?", (user,))
+        cursor.execute("SELECT * FROM Usuarios WHERE Nome=%s", (user,))
         if not cursor.fetchone():
-            cursor.execute("INSERT INTO Usuarios VALUES (NULL,?,?)", (user, senha))
+            cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (%s, %s)", (user, senha))
 
     conexao.commit()
+    cursor.close()
     conexao.close()
 
 init_db()
@@ -416,7 +423,6 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
             <input type="text" name="servico_desc" required placeholder="Ex: Lavagem completa + Troca de Óleo" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
         </div>
 
-        <!-- Seletor dinâmico de múltiplos produtos por código -->
         <div class="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
             <h3 class="text-sm font-bold text-cyan-400 uppercase tracking-wide"><i class="fa-solid fa-boxes-stacked mr-1"></i> Adicionar Produtos/Insumos por Código</h3>
             <div id="itens-container" class="space-y-3">
@@ -534,16 +540,16 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 </div>
 """)
 
-# ROTAS PRINCIPAIS DO FLASK COM A CORREÇÃO DO VALOR DO ESTOQUE
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         usuario = request.form['usuario']
         senha = request.form['senha']
-        conexao = sqlite3.connect(BANCO_DADOS)
+        conexao = get_db_connection()
         cursor = conexao.cursor()
-        cursor.execute("SELECT * FROM Usuarios WHERE Nome=? AND Senha=?", (usuario, senha))
+        cursor.execute("SELECT * FROM Usuarios WHERE Nome=%s AND Senha=%s", (usuario, senha))
         user = cursor.fetchone()
+        cursor.close()
         conexao.close()
         if user:
             session['usuario'] = usuario
@@ -562,10 +568,9 @@ def index():
     if 'usuario' not in session:
         return redirect(url_for('login'))
     
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
     
-    # CORREÇÃO APLICADA AQUI: Soma correta do valor do estoque (CustoCompra)
     cursor.execute("SELECT SUM(CustoCompra) FROM Produtos")
     res_estoque = cursor.fetchone()
     valor_estoque = res_estoque[0] if res_estoque and res_estoque[0] else 0.0
@@ -583,6 +588,7 @@ def index():
     cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos")
     produtos = cursor.fetchall()
 
+    cursor.close()
     conexao.close()
 
     return render_template_string(INDEX_HTML, 
@@ -604,14 +610,17 @@ def novo_produto():
         unidade = request.form['unidade']
         custo = float(request.form['custo'] or 0)
 
-        conexao = sqlite3.connect(BANCO_DADOS)
+        conexao = get_db_connection()
         cursor = conexao.cursor()
         try:
-            cursor.execute("INSERT INTO Produtos VALUES (?, ?, ?, ?, ?, ?, ?)", (id_prod, nome, desc, preco, qtd, unidade, custo))
+            cursor.execute("INSERT INTO Produtos (ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra) VALUES (%s, %s, %s, %s, %s, %s, %s)", 
+                           (id_prod, nome, desc, preco, qtd, unidade, custo))
             conexao.commit()
             flash('Produto cadastrado com sucesso!', 'success')
-        except sqlite3.IntegrityError:
+        except Exception:
+            conexao.rollback()
             flash('Erro: Já existe um produto com este código!', 'error')
+        cursor.close()
         conexao.close()
         return redirect(url_for('index'))
     return render_template_string(FORM_PRODUTO_HTML, titulo="Novo Produto / Insumo", p=None)
@@ -619,7 +628,7 @@ def novo_produto():
 @app.route('/produto/editar/<id>', methods=['GET', 'POST'])
 def editar_produto(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
     if request.method == 'POST':
         nome = request.form['nome']
@@ -629,25 +638,28 @@ def editar_produto(id):
         unidade = request.form['unidade']
         custo = float(request.form['custo'] or 0)
 
-        cursor.execute("UPDATE Produtos SET NomeProduto=?, Descricao=?, Preco=?, QtdEstoque=?, UnidadeMedida=?, CustoCompra=? WHERE ID=?", 
+        cursor.execute("UPDATE Produtos SET NomeProduto=%s, Descricao=%s, Preco=%s, QtdEstoque=%s, UnidadeMedida=%s, CustoCompra=%s WHERE ID=%s", 
                        (nome, desc, preco, qtd, unidade, custo, id))
         conexao.commit()
+        cursor.close()
         conexao.close()
         flash('Produto atualizado com sucesso!', 'success')
         return redirect(url_for('index'))
     
-    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=?", (id,))
+    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=%s", (id,))
     p = cursor.fetchone()
+    cursor.close()
     conexao.close()
     return render_template_string(FORM_PRODUTO_HTML, titulo="Editar Produto / Insumo", p=p)
 
 @app.route('/produto/excluir/<id>')
 def excluir_produto(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("DELETE FROM Produtos WHERE ID=?", (id,))
+    cursor.execute("DELETE FROM Produtos WHERE ID=%s", (id,))
     conexao.commit()
+    cursor.close()
     conexao.close()
     flash('Produto excluído!', 'success')
     return redirect(url_for('index'))
@@ -655,10 +667,11 @@ def excluir_produto(id):
 @app.route('/clientes')
 def clientes():
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
     cursor.execute("SELECT ID, Nome, Endereco, Telefone, ModeloMoto, Placa, KM FROM Clientes")
     clientes = cursor.fetchall()
+    cursor.close()
     conexao.close()
     return render_template_string(CLIENTES_HTML, clientes=clientes)
 
@@ -675,11 +688,12 @@ def novo_cliente():
         km = request.form['km']
         data = request.form['data']
 
-        conexao = sqlite3.connect(BANCO_DADOS)
+        conexao = get_db_connection()
         cursor = conexao.cursor()
-        cursor.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, Placa, KM, DataEntrada) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        cursor.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, Placa, KM, DataEntrada) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                        (nome, endereco, telefone, modelo, ano, placa, km, data))
         conexao.commit()
+        cursor.close()
         conexao.close()
         flash('Cliente cadastrado com sucesso!', 'success')
         return redirect(url_for('clientes'))
@@ -688,7 +702,7 @@ def novo_cliente():
 @app.route('/cliente/editar/<int:id>', methods=['GET', 'POST'])
 def editar_cliente(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
     if request.method == 'POST':
         nome = request.form['nome']
@@ -700,26 +714,29 @@ def editar_cliente(id):
         km = request.form['km']
         data = request.form['data']
 
-        cursor.execute("UPDATE Clientes SET Nome=?, Endereco=?, Telefone=?, ModeloMoto=?, AnoMoto=?, Placa=?, KM=?, DataEntrada=? WHERE ID=?",
+        cursor.execute("UPDATE Clientes SET Nome=%s, Endereco=%s, Telefone=%s, ModeloMoto=%s, AnoMoto=%s, Placa=%s, KM=%s, DataEntrada=%s WHERE ID=%s",
                        (nome, endereco, telefone, modelo, ano, placa, km, data, id))
         conexao.commit()
+        cursor.close()
         conexao.close()
         flash('Cliente atualizado com sucesso!', 'success')
         return redirect(url_for('clientes'))
 
-    cursor.execute("SELECT ID, Nome, Endereco, Telefone, ModeloMoto, AnoMoto, KM, Placa, DataEntrada FROM Clientes WHERE ID=?", (id,))
+    cursor.execute("SELECT ID, Nome, Endereco, Telefone, ModeloMoto, AnoMoto, KM, Placa, DataEntrada FROM Clientes WHERE ID=%s", (id,))
     c = cursor.fetchone()
+    cursor.close()
     conexao.close()
     return render_template_string(FORM_CLIENTE_HTML, titulo="Editar Cliente", c=c)
 
 @app.route('/cliente/excluir/<int:id>')
 def excluir_cliente(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("DELETE FROM Clientes WHERE ID=?", (id,))
-    cursor.execute("DELETE FROM Vendas WHERE ClienteID=?", (id,))
+    cursor.execute("DELETE FROM Clientes WHERE ID=%s", (id,))
+    cursor.execute("DELETE FROM Vendas WHERE ClienteID=%s", (id,))
     conexao.commit()
+    cursor.close()
     conexao.close()
     flash('Cliente e histórico removidos!', 'success')
     return redirect(url_for('clientes'))
@@ -727,10 +744,11 @@ def excluir_cliente(id):
 @app.route('/despesas')
 def despesas():
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
     cursor.execute("SELECT ID, Descricao, Categoria, Valor, DataDespesa, Observacao FROM Despesas")
     despesas = cursor.fetchall()
+    cursor.close()
     conexao.close()
     return render_template_string(DESPESAS_HTML, despesas=despesas)
 
@@ -744,11 +762,12 @@ def nova_despesa():
         data = request.form['data']
         obs = request.form['obs']
 
-        conexao = sqlite3.connect(BANCO_DADOS)
+        conexao = get_db_connection()
         cursor = conexao.cursor()
-        cursor.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (?, ?, ?, ?, ?)",
+        cursor.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (%s, %s, %s, %s, %s)",
                        (desc, cat, valor, data, obs))
         conexao.commit()
+        cursor.close()
         conexao.close()
         flash('Despesa registrada com sucesso!', 'success')
         return redirect(url_for('despesas'))
@@ -758,10 +777,11 @@ def nova_despesa():
 @app.route('/despesa/excluir/<int:id>')
 def excluir_despesa(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("DELETE FROM Despesas WHERE ID=?", (id,))
+    cursor.execute("DELETE FROM Despesas WHERE ID=%s", (id,))
     conexao.commit()
+    cursor.close()
     conexao.close()
     flash('Despesa excluída!', 'success')
     return redirect(url_for('despesas'))
@@ -769,7 +789,7 @@ def excluir_despesa(id):
 @app.route('/cliente/servico/<int:cliente_id>', methods=['GET', 'POST'])
 def lancamento_servico(cliente_id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
 
     if request.method == 'POST':
@@ -787,46 +807,50 @@ def lancamento_servico(cliente_id):
             if cod:
                 try:
                     qtd_usada = float(qtd_str or 0)
-                    cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - ? WHERE ID = ?", (qtd_usada, cod))
+                    cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - %s WHERE ID = %s", (qtd_usada, cod))
                 except ValueError:
                     pass
 
-        cursor.execute("INSERT INTO Vendas (ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        cursor.execute("INSERT INTO Vendas (ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                        (cliente_id, servico_desc, valor_total, valor_pago, data_compra, forma_pagto, obs))
         conexao.commit()
+        cursor.close()
         conexao.close()
         flash('Serviço lançado com sucesso e estoque atualizado!', 'success')
         return redirect(url_for('historico_cliente', cliente_id=cliente_id))
 
-    cursor.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cursor.execute("SELECT * FROM Clientes WHERE ID=%s", (cliente_id,))
     cliente = cursor.fetchone()
     cursor.execute("SELECT ID, NomeProduto, Preco, QtdEstoque, UnidadeMedida FROM Produtos")
     produtos = cursor.fetchall()
+    cursor.close()
     conexao.close()
     return render_template_string(LANCAMENTO_SERVICO_HTML, cliente=cliente, produtos=produtos)
 
 @app.route('/cliente/historico/<int:cliente_id>')
 def historico_cliente(cliente_id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cursor.execute("SELECT * FROM Clientes WHERE ID=%s", (cliente_id,))
     cliente = cursor.fetchone()
-    cursor.execute("SELECT ID, ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao FROM Vendas WHERE ClienteID=?", (cliente_id,))
+    cursor.execute("SELECT ID, ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao FROM Vendas WHERE ClienteID=%s", (cliente_id,))
     vendas = cursor.fetchall()
+    cursor.close()
     conexao.close()
     return render_template_string(HISTORICO_HTML, cliente=cliente, vendas=vendas)
 
 @app.route('/venda/excluir/<int:id>')
 def excluir_venda(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("SELECT ClienteID FROM Vendas WHERE ID=?", (id,))
+    cursor.execute("SELECT ClienteID FROM Vendas WHERE ID=%s", (id,))
     res = cursor.fetchone()
     cliente_id = res[0] if res else None
-    cursor.execute("DELETE FROM Vendas WHERE ID=?", (id,))
+    cursor.execute("DELETE FROM Vendas WHERE ID=%s", (id,))
     conexao.commit()
+    cursor.close()
     conexao.close()
     flash('Lançamento excluído!', 'success')
     if cliente_id:
@@ -836,12 +860,13 @@ def excluir_venda(id):
 @app.route('/cliente/pdf/<int:cliente_id>')
 def gerar_pdf_cliente(cliente_id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cursor.execute("SELECT * FROM Clientes WHERE ID=%s", (cliente_id,))
     cliente = cursor.fetchone()
-    cursor.execute("SELECT ID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento FROM Vendas WHERE ClienteID=?", (cliente_id,))
+    cursor.execute("SELECT ID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento FROM Vendas WHERE ClienteID=%s", (cliente_id,))
     vendas = cursor.fetchall()
+    cursor.close()
     conexao.close()
 
     buffer = BytesIO()
@@ -864,12 +889,13 @@ def gerar_pdf_cliente(cliente_id):
 @app.route('/dashboard')
 def dashboard():
     if 'usuario' not in session: return redirect(url_for('login'))
-    conexao = sqlite3.connect(BANCO_DADOS)
+    conexao = get_db_connection()
     cursor = conexao.cursor()
     cursor.execute("SELECT SUM(ValorPago) FROM Vendas")
     total_receitas = cursor.fetchone()[0] or 0.0
     cursor.execute("SELECT SUM(Valor) FROM Despesas")
     total_despesas = cursor.fetchone()[0] or 0.0
+    cursor.close()
     conexao.close()
     
     dashboard_html = BASE_LAYOUT.replace("{% block content %}{% endblock %}", f"""
