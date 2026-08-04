@@ -9,40 +9,110 @@ from reportlab.lib.pagesizes import letter
 app = Flask(__name__)
 app.secret_key = 'lava_rapido_secret_key_autolub'
 
-# SUA URL DE CONEXÃO DO SUPABASE
-SUPABASE_URL = "postgresql://postgres:141252363aA@@db.snzgodvyxzvoeihlwtsc.supabase.co:5432/postgres"
+# CONEXÃO COM O SUPABASE / POSTGRESQL
+# Substitua pelos dados da sua string de conexão do Supabase (Settings -> Database -> Connection string -> URI)
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:sua_senha@db.seu-projeto.supabase.co:5432/postgres")
 
 def get_db_connection():
-    return psycopg2.connect(SUPABASE_URL)
+    return psycopg2.connect(DATABASE_URL)
 
 def init_db():
     conexao = get_db_connection()
     cursor = conexao.cursor()
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID SERIAL PRIMARY KEY, Nome TEXT UNIQUE, Senha TEXT)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID SERIAL PRIMARY KEY, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS Usuarios(
+            ID SERIAL PRIMARY KEY, 
+            Nome TEXT UNIQUE, 
+            Senha TEXT
+        )
+    """)
     
-    colunas_novas_clientes = ["KMEntrada", "KMSaida", "DataEntrada", "DataSaida"]
-    for col in colunas_novas_clientes:
-        try: 
-            cursor.execute(f"ALTER TABLE Clientes ADD COLUMN IF NOT EXISTS {col} TEXT")
-            conexao.commit()
-        except Exception: 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS Clientes(
+            ID SERIAL PRIMARY KEY, 
+            Nome TEXT, 
+            Endereco TEXT, 
+            Telefone TEXT, 
+            ModeloMoto TEXT, 
+            AnoMoto TEXT, 
+            KM TEXT, 
+            Placa TEXT,
+            KMEntrada TEXT,
+            KMSaida TEXT,
+            DataEntrada TEXT,
+            DataSaida TEXT
+        )
+    """)
+
+    # Garantir colunas caso a tabela já exista sem alguma delas
+    colunas_novas_clientes = [
+        ("ModeloMoto", "TEXT"), ("AnoMoto", "TEXT"), ("KM", "TEXT"), 
+        ("KMEntrada", "TEXT"), ("KMSaida", "TEXT"), ("DataEntrada", "TEXT"), 
+        ("DataSaida", "TEXT"), ("Placa", "TEXT")
+    ]
+    for col, tipo in colunas_novas_clientes:
+        try:
+            cursor.execute(f"ALTER TABLE Clientes ADD COLUMN IF NOT EXISTS {col} {tipo}")
+        except Exception:
             conexao.rollback()
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS Vendas(ID SERIAL PRIMARY KEY, ClienteID INTEGER, Servico TEXT, ValorTotal REAL, ValorPago REAL, DataCompra TEXT)")
-    
-    colunas_novas_vendas = ["FormaPagamento", "Observacao", "CustoInsumos"]
-    for col in colunas_novas_vendas:
-        try: 
-            cursor.execute(f"ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS {col} TEXT")
-            conexao.commit()
-        except Exception: 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS Vendas(
+            ID SERIAL PRIMARY KEY, 
+            ClienteID INTEGER, 
+            Servico TEXT, 
+            ValorTotal REAL, 
+            ValorPago REAL, 
+            DataCompra TEXT,
+            FormaPagamento TEXT,
+            Observacao TEXT,
+            CustoInsumos TEXT
+        )
+    """)
+
+    colunas_novas_vendas = [
+        ("FormaPagamento", "TEXT"), ("Observacao", "TEXT"), ("CustoInsumos", "TEXT")
+    ]
+    for col, tipo in colunas_novas_vendas:
+        try:
+            cursor.execute(f"ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS {col} {tipo}")
+        except Exception:
             conexao.rollback()
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS Produtos(ID TEXT PRIMARY KEY, NomeProduto TEXT, Descricao TEXT, Preco REAL, QtdEstoque REAL DEFAULT 0.0, UnidadeMedida TEXT DEFAULT 'un', CustoCompra REAL DEFAULT 0.0)")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS Produtos(
+            ID TEXT PRIMARY KEY, 
+            NomeProduto TEXT, 
+            Descricao TEXT, 
+            Preco REAL, 
+            QtdEstoque REAL DEFAULT 0.0, 
+            UnidadeMedida TEXT DEFAULT 'un', 
+            CustoCompra REAL DEFAULT 0.0
+        )
+    """)
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS Despesas(ID SERIAL PRIMARY KEY, Descricao TEXT, Categoria TEXT, Valor REAL, DataDespesa TEXT, Observacao TEXT)")
+    colunas_novas_produtos = [
+        ("QtdEstoque", "REAL DEFAULT 0.0"), 
+        ("UnidadeMedida", "TEXT DEFAULT 'un'"), 
+        ("CustoCompra", "REAL DEFAULT 0.0")
+    ]
+    for col, tipo in colunas_novas_produtos:
+        try:
+            cursor.execute(f"ALTER TABLE Produtos ADD COLUMN IF NOT EXISTS {col} {tipo}")
+        except Exception:
+            conexao.rollback()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS Despesas(
+            ID SERIAL PRIMARY KEY, 
+            Descricao TEXT, 
+            Categoria TEXT, 
+            Valor REAL, 
+            DataDespesa TEXT, 
+            Observacao TEXT
+        )
+    """)
 
     usuarios_padrao = [('admin', '123'), ('maironxd', '14125'), ('luana', '14125'), ('josue', '123')]
     for user, senha in usuarios_padrao:
@@ -423,6 +493,7 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
             <input type="text" name="servico_desc" required placeholder="Ex: Lavagem completa + Troca de Óleo" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
         </div>
 
+        <!-- Seletor dinâmico de múltiplos produtos por código -->
         <div class="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
             <h3 class="text-sm font-bold text-cyan-400 uppercase tracking-wide"><i class="fa-solid fa-boxes-stacked mr-1"></i> Adicionar Produtos/Insumos por Código</h3>
             <div id="itens-container" class="space-y-3">
@@ -540,6 +611,7 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 </div>
 """)
 
+# ROTAS PRINCIPAIS DO FLASK COM ADAPTAÇÃO POSTGRESQL (%s nos placeholders)
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -613,13 +685,12 @@ def novo_produto():
         conexao = get_db_connection()
         cursor = conexao.cursor()
         try:
-            cursor.execute("INSERT INTO Produtos (ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra) VALUES (%s, %s, %s, %s, %s, %s, %s)", 
-                           (id_prod, nome, desc, preco, qtd, unidade, custo))
+            cursor.execute("INSERT INTO Produtos VALUES (%s, %s, %s, %s, %s, %s, %s)", (id_prod, nome, desc, preco, qtd, unidade, custo))
             conexao.commit()
             flash('Produto cadastrado com sucesso!', 'success')
         except Exception:
             conexao.rollback()
-            flash('Erro: Já existe um produto com este código!', 'error')
+            flash('Erro: Já existe um produto com este código ou dados inválidos!', 'error')
         cursor.close()
         conexao.close()
         return redirect(url_for('index'))
