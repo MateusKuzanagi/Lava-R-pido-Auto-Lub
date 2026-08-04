@@ -406,15 +406,34 @@ FORM_DESPESA_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 """)
 
 LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
-<div class="max-w-2xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
-    <h1 class="text-xl font-bold text-white mb-2"><i class="fa-solid fa-cash-register text-cyan-400 mr-2"></i> Lançar Serviço / Lavagem</h1>
+<div class="max-w-3xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
+    <h1 class="text-xl font-bold text-white mb-2"><i class="fa-solid fa-cash-register text-cyan-400 mr-2"></i> Lançar Serviço e Selecionar Produtos</h1>
     <p class="text-slate-400 text-sm mb-6">Cliente: <span class="text-cyan-400 font-semibold">{{ cliente[1] }}</span></p>
 
-    <form method="POST" class="space-y-4">
+    <form method="POST" class="space-y-6">
         <div>
-            <label class="block text-sm font-medium text-slate-300 mb-1">Descrição do Serviço / Lavagem</label>
-            <input type="text" name="servico_desc" required placeholder="Ex: Lavagem Completa + Cera" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            <label class="block text-sm font-medium text-slate-300 mb-1">Descrição Geral do Serviço / Observação da OS</label>
+            <input type="text" name="servico_desc" required placeholder="Ex: Lavagem completa + Troca de Óleo" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
         </div>
+
+        <!-- Seletor dinâmico de múltiplos produtos por código -->
+        <div class="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
+            <h3 class="text-sm font-bold text-cyan-400 uppercase tracking-wide"><i class="fa-solid fa-boxes-stacked mr-1"></i> Adicionar Produtos/Insumos por Código</h3>
+            <div id="itens-container" class="space-y-3">
+                <div class="flex gap-2 items-center item-row">
+                    <select name="produto_codigo[]" class="flex-2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                        <option value="">Selecione um produto/serviço...</option>
+                        {% for p in produtos %}
+                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - R$ {{ "%.2f"|format(p[3] or 0.0) }} (Estoque: {{ p[4] }})</option>
+                        {% endfor %}
+                    </select>
+                    <input type="number" step="0.01" name="produto_qtd[]" placeholder="Qtd" value="1" class="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                    <button type="button" onclick="removerLinha(this)" class="bg-red-600/20 text-red-400 hover:bg-red-600 hover:text-white px-3 py-2 rounded-lg text-sm transition"><i class="fa-solid fa-trash"></i></button>
+                </div>
+            </div>
+            <button type="button" onclick="adicionarLinha()" class="mt-2 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold transition"><i class="fa-solid fa-plus mr-1"></i> Adicionar Outro Item</button>
+        </div>
+
         <div class="grid grid-cols-2 gap-4">
             <div>
                 <label class="block text-sm font-medium text-slate-300 mb-1">Valor Total (R$)</label>
@@ -437,15 +456,34 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
                 </select>
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-300 mb-1">Observação</label>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Observações Adicionais</label>
                 <input type="text" name="obs" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
             </div>
         </div>
         <div class="pt-4">
-            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow transition">FINALIZAR LANÇAMENTO</button>
+            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow transition">FINALIZAR LANÇAMENTO E DAR BAIXA</button>
         </div>
     </form>
 </div>
+
+<script>
+function adicionarLinha() {
+    const container = document.getElementById('itens-container');
+    const primeiraLinha = container.querySelector('.item-row');
+    const novaLinha = primeiraLinha.cloneNode(true);
+    novaLinha.querySelector('input').value = '1';
+    novaLinha.querySelector('select').selectedIndex = 0;
+    container.appendChild(novaLinha);
+}
+function removerLinha(btn) {
+    const container = document.getElementById('itens-container');
+    if (container.querySelectorAll('.item-row').length > 1) {
+        btn.closest('.item-row').remove();
+    } else {
+        alert('Você deve manter pelo menos uma linha de item.');
+    }
+}
+</script>
 """)
 
 HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
@@ -456,7 +494,7 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
             <p class="text-slate-400 text-sm mt-1">Tel: {{ cliente[3] or 'N/I' }} | Veículo: {{ cliente[4] or 'N/A' }} (Placa: {{ cliente[7] or 'N/A' }})</p>
         </div>
         <div class="space-x-2">
-            <a href="{{ url_for('gerar_pdf_cliente', cliente_id=cliente[0]) }}" class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition inline-flex items-center"><i class="fa-solid fa-file-pdf mr-2"></i> Baixar Relatório PDF</a>
+            <a href="{{ url_for('gerar_pdf_cliente', cliente_id=cliente[0]) }}" class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition inline-flex items-center"><i class="fa-solid fa-file-pdf mr-2"></i> Baixar Extrato/Débito PDF</a>
             <a href="{{ url_for('clientes') }}" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-lg text-sm font-semibold">Voltar</a>
         </div>
     </div>
@@ -470,8 +508,8 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                     <th class="p-4">Serviço / Produtos</th>
                     <th class="p-4">Total</th>
                     <th class="p-4">Pago</th>
+                    <th class="p-4">Débito / Saldo</th>
                     <th class="p-4">Pagamento</th>
-                    <th class="p-4">Obs</th>
                     <th class="p-4 text-center">Ações</th>
                 </tr>
             </thead>
@@ -483,8 +521,8 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                     <td class="p-4 text-white">{{ v[2] }}</td>
                     <td class="p-4 text-slate-300">R$ {{ "%.2f"|format(v[3]) }}</td>
                     <td class="p-4 text-emerald-400">R$ {{ "%.2f"|format(v[4]) }}</td>
+                    <td class="p-4 font-bold {% if (v[3] - v[4]) > 0 %}text-red-400{% else %}text-emerald-400{% endif %}">R$ {{ "%.2f"|format(v[3] - v[4]) }}</td>
                     <td class="p-4 text-slate-300">{{ v[6] or '-' }}</td>
-                    <td class="p-4 text-slate-400">{{ v[7] or '-' }}</td>
                     <td class="p-4 text-center">
                         <a href="{{ url_for('gerar_pdf_os', venda_id=v[0]) }}" class="bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 px-3 py-1 rounded-lg text-xs font-bold" title="Imprimir OS em PDF"><i class="fa-solid fa-print"></i> OS PDF</a>
                     </td>
@@ -525,15 +563,18 @@ DASHBOARD_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        user = request.form.get('usuario')
-        senha = request.form.get('senha')
-        conn = sqlite3.connect(BANCO_DADOS)
-        u = conn.execute("SELECT * FROM Usuarios WHERE Nome=? AND Senha=?", (user, senha)).fetchone()
-        conn.close()
-        if u:
-            session['usuario'] = user
+        usuario = request.form['usuario']
+        senha = request.form['senha']
+        conexao = sqlite3.connect(BANCO_DADOS)
+        cursor = conexao.cursor()
+        cursor.execute("SELECT * FROM Usuarios WHERE Nome=? AND Senha=?", (usuario, senha))
+        user = cursor.fetchone()
+        conexao.close()
+        if user:
+            session['usuario'] = usuario
             return redirect(url_for('index'))
-        flash('Credenciais incorretas!', 'error')
+        else:
+            flash("Usuário ou senha incorretos!", "error")
     return render_template_string(LOGIN_HTML)
 
 @app.route('/logout')
@@ -544,324 +585,379 @@ def logout():
 @app.route('/')
 def index():
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    produtos = conn.execute("SELECT * FROM Produtos").fetchall()
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT * FROM Produtos")
+    produtos = cursor.fetchall()
     
-    mes_atual = datetime.now().strftime("/%m/%Y")
-    vendas_mes = conn.execute("SELECT ValorPago FROM Vendas WHERE DataCompra LIKE ?", (f"%{mes_atual}%",)).fetchall()
-    receita_mes = sum([v[0] for v in vendas_mes if v[0] is not None])
-    conn.close()
-
     total_cadastrados = len(produtos)
-    valor_estoque = sum([float(p[6]) for p in produtos if len(p)>6 and p[6] is not None])
-    estoque_baixo = sum([1 for p in produtos if len(p)>4 and p[4] is not None and float(p[4]) <= 2])
-
+    valor_estoque = sum((p[4] or 0) * (p[6] or 0) for p in produtos)
+    estoque_baixo = sum(1 for p in produtos if (p[4] or 0) <= 2)
+    
+    cursor.execute("SELECT SUM(ValorPago) FROM Vendas")
+    res_receita = cursor.fetchone()[0]
+    receita_mes = res_receita if res_receita else 0.0
+    conexao.close()
+    
     return render_template_string(INDEX_HTML, produtos=produtos, total_cadastrados=total_cadastrados, valor_estoque=valor_estoque, receita_mes=receita_mes, estoque_baixo=estoque_baixo)
 
 @app.route('/produto/novo', methods=['GET', 'POST'])
 def novo_produto():
     if 'usuario' not in session: return redirect(url_for('login'))
     if request.method == 'POST':
-        pid = request.form.get('id')
-        nome = request.form.get('nome')
-        desc = request.form.get('desc')
-        preco = float(request.form.get('preco') or 0.0)
-        qtd = float(request.form.get('qtd') or 0.0)
-        unidade = request.form.get('unidade')
-        custo = float(request.form.get('custo') or 0.0)
-
-        conn = sqlite3.connect(BANCO_DADOS)
-        conn.execute("INSERT OR REPLACE INTO Produtos (ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                     (pid, nome, desc, preco, qtd, unidade, custo))
-        conn.commit()
-        conn.close()
-        flash('Produto salvo com sucesso!', 'success')
+        pid = request.form['id']
+        nome = request.form['nome']
+        desc = request.form['desc']
+        preco = float(request.form['preco'] or 0)
+        qtd = float(request.form['qtd'] or 0)
+        unidade = request.form['unidade']
+        custo = float(request.form['custo'] or 0)
+        
+        conexao = sqlite3.connect(BANCO_DADOS)
+        cursor = conexao.cursor()
+        try:
+            cursor.execute("INSERT INTO Produtos VALUES (?,?,?,?,?,?,?)", (pid, nome, desc, preco, qtd, unidade, custo))
+            conexao.commit()
+            flash("Produto cadastrado com sucesso!", "success")
+        except sqlite3.IntegrityError:
+            flash("Código de produto já cadastrado!", "error")
+        conexao.close()
         return redirect(url_for('index'))
-    return render_template_string(FORM_PRODUTO_HTML, titulo="Novo Produto/Insumo", p=None)
+    return render_template_string(FORM_PRODUTO_HTML, titulo="Novo Produto ou Insumo", p=None)
 
 @app.route('/produto/editar/<id>', methods=['GET', 'POST'])
 def editar_produto(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
     if request.method == 'POST':
-        nome = request.form.get('nome')
-        desc = request.form.get('desc')
-        preco = float(request.form.get('preco') or 0.0)
-        qtd = float(request.form.get('qtd') or 0.0)
-        unidade = request.form.get('unidade')
-        custo = float(request.form.get('custo') or 0.0)
-
-        conn.execute("UPDATE Produtos SET NomeProduto=?, Descricao=?, Preco=?, QtdEstoque=?, UnidadeMedida=?, CustoCompra=? WHERE ID=?",
-                     (nome, desc, preco, qtd, unidade, custo, id))
-        conn.commit()
-        conn.close()
-        flash('Produto atualizado com sucesso!', 'success')
+        nome = request.form['nome']
+        desc = request.form['desc']
+        preco = float(request.form['preco'] or 0)
+        qtd = float(request.form['qtd'] or 0)
+        unidade = request.form['unidade']
+        custo = float(request.form['custo'] or 0)
+        cursor.execute("UPDATE Produtos SET NomeProduto=?, Descricao=?, Preco=?, QtdEstoque=?, UnidadeMedida=?, CustoCompra=? WHERE ID=?", (nome, desc, preco, qtd, unidade, custo, id))
+        conexao.commit()
+        conexao.close()
+        flash("Produto atualizado com sucesso!", "success")
         return redirect(url_for('index'))
-    
-    p = conn.execute("SELECT * FROM Produtos WHERE ID=?", (id,)).fetchone()
-    conn.close()
-    return render_template_string(FORM_PRODUTO_HTML, titulo="Editar Produto/Insumo", p=p)
+    cursor.execute("SELECT * FROM Produtos WHERE ID=?", (id,))
+    p = cursor.fetchone()
+    conexao.close()
+    return render_template_string(FORM_PRODUTO_HTML, titulo="Editar Produto ou Insumo", p=p)
 
 @app.route('/produto/excluir/<id>')
 def excluir_produto(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    conn.execute("DELETE FROM Produtos WHERE ID=?", (id,))
-    conn.commit()
-    conn.close()
-    flash('Produto excluído!', 'success')
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
+    cursor.execute("DELETE FROM Produtos WHERE ID=?", (id,))
+    conexao.commit()
+    conexao.close()
+    flash("Produto excluído!", "success")
     return redirect(url_for('index'))
 
 @app.route('/clientes')
 def clientes():
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    clientes = conn.execute("SELECT * FROM Clientes").fetchall()
-    conn.close()
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ID, Nome, Endereco, Telefone, ModeloMoto, Placa, KM FROM Clientes")
+    clientes = cursor.fetchall()
+    conexao.close()
     return render_template_string(CLIENTES_HTML, clientes=clientes)
 
 @app.route('/cliente/novo', methods=['GET', 'POST'])
 def novo_cliente():
     if 'usuario' not in session: return redirect(url_for('login'))
     if request.method == 'POST':
-        nome = request.form.get('nome')
-        endereco = request.form.get('endereco')
-        telefone = request.form.get('telefone')
-        modelo = request.form.get('modelo')
-        ano = request.form.get('ano')
-        km = request.form.get('km')
-        placa = request.form.get('placa')
-        data = request.form.get('data')
-
-        conn = sqlite3.connect(BANCO_DADOS)
-        conn.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, KM, Placa, DataEntrada) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                     (nome, endereco, telefone, modelo, ano, km, placa, data))
-        conn.commit()
-        conn.close()
-        flash('Cliente cadastrado com sucesso!', 'success')
+        nome = request.form['nome']
+        endereco = request.form['endereco']
+        telefone = request.form['telefone']
+        modelo = request.form['modelo']
+        ano = request.form['ano']
+        placa = request.form['placa']
+        km = request.form['km']
+        data = request.form['data'] or datetime.now().strftime('%d/%m/%Y')
+        
+        conexao = sqlite3.connect(BANCO_DADOS)
+        cursor = conexao.cursor()
+        cursor.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, Placa, KM, DataEntrada) VALUES (?,?,?,?,?,?,?,?)", (nome, endereco, telefone, modelo, ano, placa, km, data))
+        conexao.commit()
+        conexao.close()
+        flash("Cliente cadastrado com sucesso!", "success")
         return redirect(url_for('clientes'))
     return render_template_string(FORM_CLIENTE_HTML, titulo="Novo Cliente", c=None)
 
 @app.route('/cliente/editar/<int:id>', methods=['GET', 'POST'])
 def editar_cliente(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
     if request.method == 'POST':
-        nome = request.form.get('nome')
-        endereco = request.form.get('endereco')
-        telefone = request.form.get('telefone')
-        modelo = request.form.get('modelo')
-        ano = request.form.get('ano')
-        km = request.form.get('km')
-        placa = request.form.get('placa')
-        data = request.form.get('data')
-
-        conn.execute("UPDATE Clientes SET Nome=?, Endereco=?, Telefone=?, ModeloMoto=?, AnoMoto=?, KM=?, Placa=?, DataEntrada=? WHERE ID=?",
-                     (nome, endereco, telefone, modelo, ano, km, placa, data, id))
-        conn.commit()
-        conn.close()
-        flash('Cliente atualizado com sucesso!', 'success')
+        nome = request.form['nome']
+        endereco = request.form['endereco']
+        telefone = request.form['telefone']
+        modelo = request.form['modelo']
+        ano = request.form['ano']
+        placa = request.form['placa']
+        km = request.form['km']
+        data = request.form['data']
+        cursor.execute("UPDATE Clientes SET Nome=?, Endereco=?, Telefone=?, ModeloMoto=?, AnoMoto=?, Placa=?, KM=?, DataEntrada=? WHERE ID=?", (nome, endereco, telefone, modelo, ano, placa, km, data, id))
+        conexao.commit()
+        conexao.close()
+        flash("Cliente atualizado com sucesso!", "success")
         return redirect(url_for('clientes'))
-    
-    c = conn.execute("SELECT * FROM Clientes WHERE ID=?", (id,)).fetchone()
-    conn.close()
+    cursor.execute("SELECT * FROM Clientes WHERE ID=?", (id,))
+    c = cursor.fetchone()
+    conexao.close()
     return render_template_string(FORM_CLIENTE_HTML, titulo="Editar Cliente", c=c)
 
 @app.route('/cliente/excluir/<int:id>')
 def excluir_cliente(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    conn.execute("DELETE FROM Clientes WHERE ID=?", (id,))
-    conn.execute("DELETE FROM Vendas WHERE ClienteID=?", (id,))
-    conn.commit()
-    conn.close()
-    flash('Cliente excluído com sucesso!', 'success')
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
+    cursor.execute("DELETE FROM Clientes WHERE ID=?", (id,))
+    cursor.execute("DELETE FROM Vendas WHERE ClienteID=?", (id,))
+    conexao.commit()
+    conexao.close()
+    flash("Cliente excluído!", "success")
     return redirect(url_for('clientes'))
 
-@app.route('/servico/lancar/<int:cliente_id>', methods=['GET', 'POST'])
+@app.route('/lancamento/<int:cliente_id>', methods=['GET', 'POST'])
 def lancamento_servico(cliente_id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    cliente = conn.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,)).fetchone()
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
     
     if request.method == 'POST':
-        servico_desc = request.form.get('servico_desc')
-        val_total = float(request.form.get('valor_total') or 0.0)
-        val_pago = float(request.form.get('valor_pago') or 0.0)
-        forma_pagto = request.form.get('forma_pagto')
-        obs = request.form.get('obs')
-        data_atual = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-        conn.execute("INSERT INTO Vendas (ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                     (cliente_id, servico_desc, val_total, val_pago, data_atual, forma_pagto, obs))
-        conn.commit()
-        conn.close()
-        flash('Serviço lançado com sucesso!', 'success')
-        return redirect(url_for('clientes'))
-    
-    conn.close()
-    return render_template_string(LANCAMENTO_SERVICO_HTML, cliente=cliente)
+        servico_desc = request.form['servico_desc']
+        valor_total = float(request.form['valor_total'] or 0)
+        valor_pago = float(request.form['valor_pago'] or 0)
+        forma_pagto = request.form['forma_pagto']
+        obs = request.form['obs']
+        data_compra = datetime.now().strftime('%d/%m/%Y %H:%M')
+        
+        # Processar múltiplos produtos por código e descontar do estoque
+        produtos_codigos = request.form.getlist('produto_codigo[]')
+        produtos_qtds = request.form.getlist('produto_qtd[]')
+        
+        detalhes_itens = [servico_desc]
+        for cod, qtd_str in zip(produtos_codigos, produtos_qtds):
+            if cod:
+                qtd_utilizada = float(qtd_str or 1)
+                cursor.execute("SELECT NomeProduto, QtdEstoque FROM Produtos WHERE ID=?", (cod,))
+                prod = cursor.fetchone()
+                if prod:
+                    nome_prod, estoque_atual = prod[0], (prod[1] or 0)
+                    novo_estoque = estoque_atual - qtd_utilizada
+                    # Atualizar estoque
+                    cursor.execute("UPDATE Produtos SET QtdEstoque=? WHERE ID=?", (novo_estoque, cod))
+                    detalhes_itens.append(f"- {qtd_utilizada}x {nome_prod} (Cód: {cod})")
+        
+        servico_final_str = " | ".join(detalhes_itens)
+        
+        cursor.execute("INSERT INTO Vendas (ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (?,?,?,?,?,?,?)", 
+                       (cliente_id, servico_final_str, valor_total, valor_pago, data_compra, forma_pagto, obs))
+        conexao.commit()
+        conexao.close()
+        flash("Lançamento efetuado com sucesso e estoque atualizado!", "success")
+        return redirect(url_for('historico_cliente', cliente_id=cliente_id))
+        
+    cursor.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cliente = cursor.fetchone()
+    cursor.execute("SELECT * FROM Produtos")
+    produtos = cursor.fetchall()
+    conexao.close()
+    return render_template_string(LANCAMENTO_SERVICO_HTML, cliente=cliente, produtos=produtos)
 
 @app.route('/cliente/historico/<int:cliente_id>')
 def historico_cliente(cliente_id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    cliente = conn.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,)).fetchone()
-    vendas = conn.execute("SELECT * FROM Vendas WHERE ClienteID=? ORDER BY ID DESC", (cliente_id,)).fetchall()
-    conn.close()
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cliente = cursor.fetchone()
+    cursor.execute("SELECT ID, ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao FROM Vendas WHERE ClienteID=?", (cliente_id,))
+    vendas = cursor.fetchall()
+    conexao.close()
     return render_template_string(HISTORICO_HTML, cliente=cliente, vendas=vendas)
-
-# ROTAS DE EXPORTAÇÃO EM PDF (REPORTLAB)
-@app.route('/pdf/os/<int:venda_id>')
-def gerar_pdf_os(venda_id):
-    if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    venda = conn.execute("SELECT * FROM Vendas WHERE ID=?", (venda_id,)).fetchone()
-    if not venda:
-        conn.close()
-        flash('Ordem de serviço não encontrada!', 'error')
-        return redirect(url_for('clientes'))
-    
-    cliente = conn.execute("SELECT * FROM Clientes WHERE ID=?", (venda[1],)).fetchone()
-    conn.close()
-
-    buffer = BytesIO()
-    p = canvas.Canvas(buffer, pagesize=letter)
-    p.setTitle(f"Ordem_Servico_{venda_id}")
-
-    # Cabeçalho da OS
-    p.setFont("Helvetica-Bold", 18)
-    p.drawString(50, 750, "LAVA RÁPIDO AUTO LUB")
-    p.setFont("Helvetica", 10)
-    p.drawString(50, 735, "Comprovante de Ordem de Serviço / Nota")
-    p.line(50, 725, 560, 725)
-
-    # Dados da OS e Cliente
-    p.setFont("Helvetica-Bold", 12)
-    p.drawString(50, 700, f"Ordem de Serviço # {venda[0]}")
-    p.setFont("Helvetica", 10)
-    p.drawString(50, 680, f"Data/Hora: {venda[5] or '-'}")
-    
-    if cliente:
-        p.drawString(50, 655, f"Cliente: {cliente[1]}")
-        p.drawString(50, 640, f"Telefone: {cliente[3] or '-'}")
-        p.drawString(50, 625, f"Veículo: {cliente[4] or '-'} | Placa: {cliente[7] or '-'} | KM: {cliente[6] or '-'}")
-
-    # Detalhes do Serviço
-    p.line(50, 610, 560, 610)
-    p.setFont("Helvetica-Bold", 12)
-    p.drawString(50, 590, "Descrição dos Serviços / Produtos:")
-    p.setFont("Helvetica", 10)
-    p.drawString(50, 570, f"{venda[2]}")
-
-    # Valores e Pagamento
-    p.line(50, 540, 560, 540)
-    p.setFont("Helvetica-Bold", 11)
-    p.drawString(50, 520, f"Valor Total: R$ {venda[3]:.2f}")
-    p.drawString(50, 505, f"Valor Pago: R$ {venda[4]:.2f}")
-    p.drawString(50, 490, f"Forma de Pagamento: {venda[6] or '-'}")
-    p.drawString(50, 475, f"Observações: {venda[7] or '-'}")
-
-    # Rodapé
-    p.line(50, 440, 560, 440)
-    p.setFont("Helvetica-Oblique", 9)
-    p.drawString(50, 425, "Obrigado pela preferência! Volte sempre.")
-
-    p.showPage()
-    p.save()
-    buffer.seek(0)
-    return send_file(buffer, as_attachment=True, download_name=f"OS_{venda_id}.pdf", mimetype='application/pdf')
-
-@app.route('/pdf/cliente/<int:cliente_id>')
-def gerar_pdf_cliente(cliente_id):
-    if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    cliente = conn.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,)).fetchone()
-    vendas = conn.execute("SELECT * FROM Vendas WHERE ClienteID=?", (cliente_id,)).fetchall()
-    conn.close()
-
-    if not cliente:
-        flash('Cliente não encontrado!', 'error')
-        return redirect(url_for('clientes'))
-
-    buffer = BytesIO()
-    p = canvas.Canvas(buffer, pagesize=letter)
-    p.setTitle(f"Historico_{cliente[1]}")
-
-    p.setFont("Helvetica-Bold", 16)
-    p.drawString(50, 750, "LAVA RÁPIDO AUTO LUB - PRONTUÁRIO DO CLIENTE")
-    p.line(50, 740, 560, 740)
-
-    p.setFont("Helvetica-Bold", 11)
-    p.drawString(50, 720, f"Cliente: {cliente[1]}")
-    p.setFont("Helvetica", 10)
-    p.drawString(50, 705, f"Endereço: {cliente[2] or '-'}")
-    p.drawString(50, 690, f"Telefone: {cliente[3] or '-'}")
-    p.drawString(50, 675, f"Veículo: {cliente[4] or '-'} | Ano: {cliente[5] or '-'} | Placa: {cliente[7] or '-'} | KM: {cliente[6] or '-'}")
-
-    p.line(50, 660, 560, 660)
-    p.setFont("Helvetica-Bold", 11)
-    p.drawString(50, 640, "Histórico de At S / Serviços:")
-
-    y = 620
-    for v in vendas:
-        if y < 100:
-            p.showPage()
-            y = 750
-        p.setFont("Helvetica", 9)
-        p.drawString(50, y, f"OS #{v[0]} | Data: {v[5] or '-'} | Serv: {v[2]} | Tot: R$ {v[3]:.2f} | Pago: R$ {v[4]:.2f}")
-        y -= 20
-
-    p.showPage()
-    p.save()
-    buffer.seek(0)
-    return send_file(buffer, as_attachment=True, download_name=f"Cliente_{cliente_id}_Historico.pdf", mimetype='application/pdf')
 
 @app.route('/despesas')
 def despesas():
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    despesas = conn.execute("SELECT * FROM Despesas ORDER BY ID DESC").fetchall()
-    conn.close()
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT * FROM Despesas")
+    despesas = cursor.fetchall()
+    conexao.close()
     return render_template_string(DESPESAS_HTML, despesas=despesas)
 
 @app.route('/despesa/nova', methods=['GET', 'POST'])
 def nova_despesa():
     if 'usuario' not in session: return redirect(url_for('login'))
     if request.method == 'POST':
-        desc = request.form.get('descricao')
-        cat = request.form.get('categoria')
-        val = float(request.form.get('valor') or 0.0)
-        data = request.form.get('data')
-        obs = request.form.get('obs')
-
-        conn = sqlite3.connect(BANCO_DADOS)
-        conn.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (?, ?, ?, ?, ?)",
-                     (desc, cat, val, data, obs))
-        conn.commit()
-        conn.close()
-        flash('Despesa cadastrada!', 'success')
+        desc = request.form['descricao']
+        cat = request.form['categoria']
+        val = float(request.form['valor'] or 0)
+        data = request.form['data']
+        obs = request.form['obs']
+        
+        conexao = sqlite3.connect(BANCO_DADOS)
+        cursor = conexao.cursor()
+        cursor.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (?,?,?,?,?)", (desc, cat, val, data, obs))
+        conexao.commit()
+        conexao.close()
+        flash("Despesa cadastrada!", "success")
         return redirect(url_for('despesas'))
-    return render_template_string(FORM_DESPESA_HTML, hoje=datetime.now().strftime("%d/%m/%Y"))
+    hoje = datetime.now().strftime('%d/%m/%Y')
+    return render_template_string(FORM_DESPESA_HTML, hoje=hoje)
 
 @app.route('/despesa/excluir/<int:id>')
 def excluir_despesa(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    conn.execute("DELETE FROM Despesas WHERE ID=?", (id,))
-    conn.commit()
-    conn.close()
-    flash('Despesa excluída!', 'success')
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
+    cursor.execute("DELETE FROM Despesas WHERE ID=?", (id,))
+    conexao.commit()
+    conexao.close()
+    flash("Despesa excluída!", "success")
     return redirect(url_for('despesas'))
 
 @app.route('/dashboard')
 def dashboard():
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    vendas = conn.execute("SELECT SUM(ValorPago) FROM Vendas").fetchone()[0] or 0.0
-    despesas = conn.execute("SELECT SUM(Valor) FROM Despesas").fetchone()[0] or 0.0
-    conn.close()
-    return render_template_string(DASHBOARD_HTML, tot_vendas=vendas, tot_despesas=despesas)
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT SUM(ValorTotal) FROM Vendas")
+    tot_vendas = cursor.fetchone()[0] or 0.0
+    cursor.execute("SELECT SUM(Valor) FROM Despesas")
+    tot_despesas = cursor.fetchone()[0] or 0.0
+    conexao.close()
+    return render_template_string(DASHBOARD_HTML, tot_vendas=tot_vendas, tot_despesas=tot_despesas)
+
+@app.route('/pdf/cliente/<int:cliente_id>')
+def gerar_pdf_cliente(cliente_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cliente = cursor.fetchone()
+    cursor.execute("SELECT ID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento FROM Vendas WHERE ClienteID=?", (cliente_id,))
+    vendas = cursor.fetchall()
+    conexao.close()
+    
+    buffer = BytesIO()
+    p = canvas.Canvas(buffer, pagesize=letter)
+    p.setTitle(f"Extrato_Cliente_{cliente[1]}")
+    
+    # Cabeçalho do PDF
+    p.setFont("Helvetica-Bold", 16)
+    p.drawString(50, 750, "Lava Rápido Auto Lub - Extrato de Conta e Débitos")
+    p.setFont("Helvetica", 10)
+    p.drawString(50, 735, f"Emitido em: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    
+    p.line(50, 725, 560, 725)
+    
+    p.setFont("Helvetica-Bold", 12)
+    p.drawString(50, 700, f"Cliente: {cliente[1]}")
+    p.setFont("Helvetica", 10)
+    p.drawString(50, 685, f"Telefone: {cliente[3] or 'N/I'} | Endereço: {cliente[2] or 'N/I'}")
+    p.drawString(50, 670, f"Veículo: {cliente[4] or 'N/A'} | Placa: {cliente[7] or 'N/A'} | KM: {cliente[6] or 'N/A'}")
+    
+    p.line(50, 655, 560, 655)
+    
+    y = 630
+    p.setFont("Helvetica-Bold", 10)
+    p.drawString(50, y, "OS")
+    p.drawString(90, y, "Data")
+    p.drawString(180, y, "Serviços / Produtos")
+    p.drawString(390, y, "Total")
+    p.drawString(440, y, "Pago")
+    p.drawString(490, y, "Débito")
+    
+    y -= 15
+    p.line(50, y+5, 560, y+5)
+    
+    total_geral = 0
+    pago_geral = 0
+    
+    p.setFont("Helvetica", 9)
+    for v in vendas:
+        if y < 100:
+            p.showPage()
+            y = 750
+        os_id, servico, v_tot, v_pago, data_c, forma = v[0], v[1], v[2], v[3], v[4], v[5]
+        debito = v_tot - v_pago
+        total_geral += v_tot
+        pago_geral += v_pago
+        
+        p.drawString(50, y, str(os_id))
+        p.drawString(90, y, str(data_c))
+        p.drawString(180, y, str(servico[:35]))
+        p.drawString(390, y, f"R$ {v_tot:.2f}")
+        p.drawString(440, y, f"R$ {v_pago:.2f}")
+        p.drawString(490, y, f"R$ {debito:.2f}")
+        y -= 20
+        
+    y -= 10
+    p.line(50, y, 560, y)
+    y -= 25
+    p.setFont("Helvetica-Bold", 11)
+    p.drawString(50, y, f"Total Geral: R$ {total_geral:.2f}  |  Total Pago: R$ {pago_geral:.2f}  |  Saldo Devedor: R$ {total_geral - pago_geral:.2f}")
+    
+    p.save()
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"Extrato_{cliente[1]}.pdf", mimetype='application/pdf')
+
+@app.route('/pdf/os/<int:venda_id>')
+def gerar_pdf_os(venda_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = sqlite3.connect(BANCO_DADOS)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT v.ID, c.Nome, c.Telefone, c.ModeloMoto, c.Placa, v.Servico, v.ValorTotal, v.ValorPago, v.DataCompra, v.FormaPagamento, v.Observacao FROM Vendas v JOIN Clientes c ON v.ClienteID = c.ID WHERE v.ID=?", (venda_id,))
+    venda = cursor.fetchone()
+    conexao.close()
+    
+    buffer = BytesIO()
+    p = canvas.Canvas(buffer, pagesize=letter)
+    p.setTitle(f"Ordem_Servico_{venda_id}")
+    
+    p.setFont("Helvetica-Bold", 16)
+    p.drawString(50, 750, "Lava Rápido Auto Lub - Comprovante de OS")
+    p.setFont("Helvetica", 10)
+    p.drawString(50, 735, f"Ordem de Serviço Nº: {venda[0]} | Data: {venda[8]}")
+    
+    p.line(50, 725, 560, 725)
+    p.setFont("Helvetica-Bold", 12)
+    p.drawString(50, 700, f"Cliente: {venda[1]}")
+    p.setFont("Helvetica", 10)
+    p.drawString(50, 685, f"Telefone: {venda[2] or 'N/I'} | Veículo: {venda[3] or 'N/A'} | Placa: {venda[4] or 'N/A'}")
+    
+    p.line(50, 670, 560, 670)
+    
+    p.setFont("Helvetica-Bold", 11)
+    p.drawString(50, 640, "Itens / Serviços Executados:")
+    p.setFont("Helvetica", 10)
+    
+    text_object = p.beginText(50, 620)
+    for linha in venda[5].split(" | "):
+        text_object.textLine(linha)
+    p.drawText(text_object)
+    
+    p.line(50, 520, 560, 520)
+    p.setFont("Helvetica-Bold", 11)
+    p.drawString(50, 495, f"Valor Total: R$ {venda[6]:.2f}")
+    p.drawString(50, 475, f"Valor Pago: R$ {venda[7]:.2f}")
+    p.drawString(50, 455, f"Saldo a Pagar (Débito): R$ {venda[6] - venda[7]:.2f}")
+    p.drawString(50, 435, f"Forma de Pagamento: {venda[9] or 'N/I'}")
+    p.drawString(50, 415, f"Observações: {venda[10] or '-'}")
+    
+    p.save()
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"OS_{venda_id}.pdf", mimetype='application/pdf')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000)
