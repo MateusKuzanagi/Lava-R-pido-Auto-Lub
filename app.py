@@ -1,48 +1,76 @@
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash
-import sqlite3
-from datetime import datetime
 import os
+from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = 'lava_rapido_secret_key_autolub'
-BANCO_DADOS = "LavaRapidoAutoLub.db"
+
+# Configuração de Banco de Dados (Compatível com SQLite local e PostgreSQL/Supabase na Nuvem)
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+if DATABASE_URL:
+    import psycopg2
+    import psycopg2.extras
+    # Ajuste para garantir compatibilidade da URL do SQLAlchemy/Render com psycopg2 puro se necessário
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+def get_db_connection():
+    if DATABASE_URL:
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.DictCursor)
+        return conn
+    else:
+        import sqlite3
+        conn = sqlite3.connect("LavaRapidoAutoLub.db", timeout=30)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 def init_db():
-    conexao = sqlite3.connect(BANCO_DADOS, timeout=30)
-    cursor = conexao.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
-    
-    colunas_novas_clientes = ["ModeloMoto", "AnoMoto", "KM", "KMEntrada", "KMSaida", "DataEntrada", "DataSaida", "Placa"]
-    for col in colunas_novas_clientes:
-        try: cursor.execute(f"ALTER TABLE Clientes ADD COLUMN {col} TEXT")
-        except sqlite3.OperationalError: pass
+    if DATABASE_URL:
+        cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios (ID SERIAL PRIMARY KEY, Nome TEXT UNIQUE, Senha TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS Clientes (ID SERIAL PRIMARY KEY, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT, KMEntrada TEXT, KMSaida TEXT, DataEntrada TEXT, DataSaida TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS Vendas (ID SERIAL PRIMARY KEY, ClienteID INTEGER, Servico TEXT, ValorTotal REAL, ValorPago REAL, DataCompra TEXT, FormaPagamento TEXT, Observacao TEXT, CustoInsumos TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS Produtos (ID TEXT PRIMARY KEY, NomeProduto TEXT, Descricao TEXT, Preco REAL, QtdEstoque REAL DEFAULT 0.0, UnidadeMedida TEXT DEFAULT 'un', CustoCompra REAL DEFAULT 0.0)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS Despesas (ID SERIAL PRIMARY KEY, Descricao TEXT, Categoria TEXT, Valor REAL, DataDespesa TEXT, Observacao TEXT)")
+    else:
+        cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
+        
+        colunas_novas_clientes = ["ModeloMoto", "AnoMoto", "KM", "KMEntrada", "KMSaida", "DataEntrada", "DataSaida", "Placa"]
+        for col in colunas_novas_clientes:
+            try: cursor.execute(f"ALTER TABLE Clientes ADD COLUMN {col} TEXT")
+            except Exception: pass
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS Vendas(ID INTEGER PRIMARY KEY AUTOINCREMENT, ClienteID INTEGER, Servico TEXT, ValorTotal REAL, ValorPago REAL, DataCompra TEXT)")
-    
-    colunas_novas_vendas = ["FormaPagamento", "Observacao", "CustoInsumos"]
-    for col in colunas_novas_vendas:
-        try: cursor.execute(f"ALTER TABLE Vendas ADD COLUMN {col} TEXT")
-        except sqlite3.OperationalError: pass
+        cursor.execute("CREATE TABLE IF NOT EXISTS Vendas(ID INTEGER PRIMARY KEY AUTOINCREMENT, ClienteID INTEGER, Servico TEXT, ValorTotal REAL, ValorPago REAL, DataCompra TEXT)")
+        
+        colunas_novas_vendas = ["FormaPagamento", "Observacao", "CustoInsumos"]
+        for col in colunas_novas_vendas:
+            try: cursor.execute(f"ALTER TABLE Vendas ADD COLUMN {col} TEXT")
+            except Exception: pass
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS Produtos(ID TEXT PRIMARY KEY, NomeProduto TEXT, Descricao TEXT, Preco REAL, QtdEstoque REAL DEFAULT 0.0, UnidadeMedida TEXT DEFAULT 'un', CustoCompra REAL DEFAULT 0.0)")
-    
-    colunas_novas_produtos = ["QtdEstoque", "UnidadeMedida", "CustoCompra"]
-    for col in colunas_novas_produtos:
-        try: cursor.execute(f"ALTER TABLE Produtos ADD COLUMN {col} TEXT")
-        except sqlite3.OperationalError: pass
+        cursor.execute("CREATE TABLE IF NOT EXISTS Produtos(ID TEXT PRIMARY KEY, NomeProduto TEXT, Descricao TEXT, Preco REAL, QtdEstoque REAL DEFAULT 0.0, UnidadeMedida TEXT DEFAULT 'un', CustoCompra REAL DEFAULT 0.0)")
+        
+        colunas_novas_produtos = ["QtdEstoque", "UnidadeMedida", "CustoCompra"]
+        for col in colunas_novas_produtos:
+            try: cursor.execute(f"ALTER TABLE Produtos ADD COLUMN {col} TEXT")
+            except Exception: pass
 
-    cursor.execute("CREATE TABLE IF NOT EXISTS Despesas(ID INTEGER PRIMARY KEY AUTOINCREMENT, Descricao TEXT, Categoria TEXT, Valor REAL, DataDespesa TEXT, Observacao TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS Despesas(ID INTEGER PRIMARY KEY AUTOINCREMENT, Descricao TEXT, Categoria TEXT, Valor REAL, DataDespesa TEXT, Observacao TEXT)")
 
     usuarios_padrao = [('admin', '123'), ('maironxd', '14125'), ('luana', '14125'), ('josue', '123')]
     for user, senha in usuarios_padrao:
-        cursor.execute("SELECT * FROM Usuarios WHERE Nome=?", (user,))
+        cursor.execute("SELECT * FROM Usuarios WHERE Nome=%s" if DATABASE_URL else "SELECT * FROM Usuarios WHERE Nome=?", (user,))
         if not cursor.fetchone():
-            cursor.execute("INSERT INTO Usuarios VALUES (NULL,?,?)", (user, senha))
+            if DATABASE_URL:
+                cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (%s, %s)", (user, senha))
+            else:
+                cursor.execute("INSERT INTO Usuarios VALUES (NULL,?,?)", (user, senha))
 
-    conexao.commit()
-    conexao.close()
+    conn.commit()
+    conn.close()
 
 init_db()
 
@@ -205,11 +233,13 @@ CLIENTES_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                     <td class="p-4 text-slate-400">{{ c[2] or '-' }}</td>
                     <td class="p-4 text-slate-300">{{ c[3] or '-' }}</td>
                     <td class="p-4 text-slate-300">{{ c[4] or '-' }}</td>
-                    <td class="p-4 font-mono text-cyan-400">{{ c[5] or '-' }}</td>
+                    <td class="p-4 font-mono text-cyan-400">{{ c[7] or c[5] or '-' }}</td>
                     <td class="p-4 text-slate-300">{{ c[6] or '-' }}</td>
-                    <td class="p-4 text-center space-x-3">
-                        <a href="{{ url_for('lancamento_servico', cliente_id=c[0]) }}" class="bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 px-3 py-1 rounded-lg text-xs font-bold" title="Lançar Serviço"><i class="fa-solid fa-cash-register"></i> Serviço</a>
-                        <a href="{{ url_for('historico_cliente', cliente_id=c[0]) }}" class="bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 px-3 py-1 rounded-lg text-xs font-bold" title="Histórico"><i class="fa-solid fa-clock-rotate-left"></i> Histórico</a>
+                    <td class="p-4 text-center space-x-2">
+                        <a href="{{ url_for('lancamento_servico', cliente_id=c[0]) }}" class="bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 px-2.5 py-1 rounded-lg text-xs font-bold" title="Lançar Serviço"><i class="fa-solid fa-cash-register"></i></a>
+                        <a href="{{ url_for('historico_cliente', cliente_id=c[0]) }}" class="bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 px-2.5 py-1 rounded-lg text-xs font-bold" title="Histórico"><i class="fa-solid fa-clock-rotate-left"></i></a>
+                        <a href="{{ url_for('extrato_cliente', cliente_id=c[0]) }}" class="bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 px-2.5 py-1 rounded-lg text-xs font-bold" title="Extrato Débitos"><i class="fa-solid fa-file-invoice-dollar"></i></a>
+                        <a href="{{ url_for('relatorio_desempenho', cliente_id=c[0]) }}" class="bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 px-2.5 py-1 rounded-lg text-xs font-bold" title="Desempenho"><i class="fa-solid fa-chart-pie"></i></a>
                         <a href="{{ url_for('editar_cliente', id=c[0]) }}" class="text-blue-400 hover:text-blue-300"><i class="fa-solid fa-pen"></i></a>
                         <a href="{{ url_for('excluir_cliente', id=c[0]) }}" onclick="return confirm('Excluir cliente e histórico?')" class="text-red-400 hover:text-red-300"><i class="fa-solid fa-trash"></i></a>
                     </td>
@@ -309,7 +339,7 @@ FORM_CLIENTE_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-300 mb-1">Data (DD/MM/AAAA)</label>
-                <input type="text" name="data" value="{{ c[8] if c and c|length > 8 and c[8] else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                <input type="text" name="data" value="{{ c[10] if c and c|length > 10 and c[10] else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
             </div>
         </div>
         <div class="flex space-x-4 pt-4">
@@ -452,7 +482,11 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
             <h1 class="text-xl font-bold text-white"><i class="fa-solid fa-user text-cyan-400 mr-2"></i> Prontuário: {{ cliente[1] }}</h1>
             <p class="text-slate-400 text-sm mt-1">Tel: {{ cliente[3] or 'N/I' }} | Veículo: {{ cliente[4] or 'N/A' }} (Placa: {{ cliente[7] or 'N/A' }})</p>
         </div>
-        <a href="{{ url_for('clientes') }}" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-lg text-sm font-semibold">Voltar</a>
+        <div class="space-x-2">
+            <a href="{{ url_for('extrato_cliente', cliente_id=cliente[0]) }}" class="bg-amber-600 hover:bg-amber-700 text-white px-3 py-2 rounded-lg text-sm font-semibold"><i class="fa-solid fa-file-invoice-dollar mr-1"></i> Extrato Débitos</a>
+            <a href="{{ url_for('relatorio_desempenho', cliente_id=cliente[0]) }}" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-lg text-sm font-semibold"><i class="fa-solid fa-chart-pie mr-1"></i> Desempenho</a>
+            <a href="{{ url_for('clientes') }}" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-lg text-sm font-semibold">Voltar</a>
+        </div>
     </div>
 
     <div class="bg-slate-900 rounded-xl border border-slate-800 shadow overflow-hidden">
@@ -474,8 +508,8 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                     <td class="p-4 font-mono text-cyan-300">{{ v[0] }}</td>
                     <td class="p-4 text-slate-300">{{ v[5] }}</td>
                     <td class="p-4 text-white">{{ v[2] }}</td>
-                    <td class="p-4 text-slate-300">R$ {{ "%.2f"|format(v[3]) }}</td>
-                    <td class="p-4 text-emerald-400">R$ {{ "%.2f"|format(v[4]) }}</td>
+                    <td class="p-4 text-slate-300">R$ {{ "%.2f"|format(v[3] or 0.0) }}</td>
+                    <td class="p-4 text-emerald-400">R$ {{ "%.2f"|format(v[4] or 0.0) }}</td>
                     <td class="p-4 text-slate-300">{{ v[6] or '-' }}</td>
                     <td class="p-4 text-slate-400">{{ v[7] or '-' }}</td>
                 </tr>
@@ -487,6 +521,162 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
     </div>
 </div>
 """)
+
+EXTRATO_HTML = """
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Extrato de Débitos - Lava Rápido Auto Lub</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @media print {
+            .no-print { display: none !important; }
+            body { background: white !important; color: black !important; }
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans p-6">
+    <div class="max-w-3xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
+        <div class="flex justify-between items-center border-b border-slate-800 pb-4 mb-6">
+            <div>
+                <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-file-invoice-dollar text-cyan-400 mr-2"></i> Extrato de Débitos / Fiado</h1>
+                <p class="text-slate-400 text-sm mt-1">Lava Rápido Auto Lub</p>
+            </div>
+            <div class="no-print">
+                <button onclick="window.print()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow"><i class="fa-solid fa-print mr-1"></i> Imprimir / PDF</button>
+                <a href="{{ url_for('clientes') }}" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-sm font-semibold ml-2">Voltar</a>
+            </div>
+        </div>
+
+        <div class="mb-6 bg-slate-950 p-4 rounded-xl border border-slate-800">
+            <p class="text-sm text-slate-400">Cliente: <strong class="text-white">{{ cliente[1] }}</strong></p>
+            <p class="text-sm text-slate-400">Telefone: <strong class="text-white">{{ cliente[3] or 'N/I' }}</strong></p>
+            <p class="text-sm text-slate-400">Veículo / Placa: <strong class="text-white">{{ cliente[4] or 'N/A' }} ({{ cliente[7] or 'N/A' }})</strong></p>
+        </div>
+
+        <div class="overflow-hidden rounded-xl border border-slate-800 mb-6">
+            <table class="w-full text-left border-collapse text-sm">
+                <thead>
+                    <tr class="bg-slate-950 text-cyan-400 uppercase text-xs border-b border-slate-800">
+                        <th class="p-3">OS #</th>
+                        <th class="p-3">Data</th>
+                        <th class="p-3">Serviço</th>
+                        <th class="p-3">Total</th>
+                        <th class="p-3">Pago</th>
+                        <th class="p-3">Pendente</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800">
+                    {% for d in debitos %}
+                    {% set pendente = (d[3] or 0.0) - (d[4] or 0.0) %}
+                    <tr class="hover:bg-slate-800/30">
+                        <td class="p-3 font-mono text-cyan-300">{{ d[0] }}</td>
+                        <td class="p-3">{{ d[5] }}</td>
+                        <td class="p-3">{{ d[2] }}</td>
+                        <td class="p-3">R$ {{ "%.2f"|format(d[3] or 0.0) }}</td>
+                        <td class="p-3 text-emerald-400">R$ {{ "%.2f"|format(d[4] or 0.0) }}</td>
+                        <td class="p-3 font-bold text-red-400">R$ {{ "%.2f"|format(pendente) }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="p-6 text-center text-slate-500">Nenhum débito ou pendência em aberto para este cliente.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 flex justify-between items-center">
+            <span class="text-lg font-bold text-slate-300">Total Geral em Aberto:</span>
+            <span class="text-2xl font-bold text-red-400">R$ {{ "%.2f"|format(total_devedor) }}</span>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+RELATORIO_DESEMPENHO_HTML = """
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Relatório de Desempenho - Lava Rápido Auto Lub</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @media print {
+            .no-print { display: none !important; }
+            body { background: white !important; color: black !important; }
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans p-6">
+    <div class="max-w-4xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
+        <div class="flex justify-between items-center border-b border-slate-800 pb-4 mb-6">
+            <div>
+                <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-chart-pie text-cyan-400 mr-2"></i> Relatório de Desempenho do Cliente</h1>
+                <p class="text-slate-400 text-sm mt-1">Lava Rápido Auto Lub</p>
+            </div>
+            <div class="no-print">
+                <button onclick="window.print()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow"><i class="fa-solid fa-print mr-1"></i> Imprimir / PDF</button>
+                <a href="{{ url_for('clientes') }}" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-sm font-semibold ml-2">Voltar</a>
+            </div>
+        </div>
+
+        <div class="mb-6 bg-slate-950 p-4 rounded-xl border border-slate-800">
+            <p class="text-sm text-slate-400">Cliente: <strong class="text-white">{{ cliente[1] }}</strong> | Telefone: <strong class="text-white">{{ cliente[3] or 'N/I' }}</strong></p>
+            <p class="text-sm text-slate-400 mt-1">Veículo: <strong class="text-white">{{ cliente[4] or 'N/A' }}</strong> | Placa: <strong class="text-white">{{ cliente[7] or 'N/A' }}</strong></p>
+        </div>
+
+        <!-- Cards de Indicadores -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                <p class="text-xs text-slate-400 uppercase font-bold">Total de Visitas</p>
+                <p class="text-2xl font-bold text-cyan-400 mt-1">{{ total_visitas }}</p>
+            </div>
+            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                <p class="text-xs text-slate-400 uppercase font-bold">Valor Total Gasto</p>
+                <p class="text-2xl font-bold text-emerald-400 mt-1">R$ {{ "%.2f"|format(total_gasto) }}</p>
+            </div>
+            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                <p class="text-xs text-slate-400 uppercase font-bold">Média por Visita</p>
+                <p class="text-2xl font-bold text-blue-400 mt-1">R$ {{ "%.2f"|format(media_gasto) }}</p>
+            </div>
+            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+                <p class="text-xs text-slate-400 uppercase font-bold">Última Visita</p>
+                <p class="text-lg font-bold text-amber-400 mt-1">{{ ultima_visita or 'Nunca' }}</p>
+            </div>
+        </div>
+
+        <h3 class="text-lg font-bold text-white mb-3">Histórico Completo de Serviços</h3>
+        <div class="overflow-hidden rounded-xl border border-slate-800">
+            <table class="w-full text-left border-collapse text-sm">
+                <thead>
+                    <tr class="bg-slate-950 text-cyan-400 uppercase text-xs border-b border-slate-800">
+                        <th class="p-3">Data</th>
+                        <th class="p-3">Serviço Realizado</th>
+                        <th class="p-3">Forma Pagto</th>
+                        <th class="p-3">Valor Total</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800">
+                    {% for s in servicos %}
+                    <tr class="hover:bg-slate-800/30">
+                        <td class="p-3">{{ s[5] }}</td>
+                        <td class="p-3 text-white font-medium">{{ s[2] }}</td>
+                        <td class="p-3 text-slate-300">{{ s[6] or '-' }}</td>
+                        <td class="p-3 font-bold text-emerald-400">R$ {{ "%.2f"|format(s[3] or 0.0) }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4" class="p-6 text-center text-slate-500">Nenhum serviço registrado para este cliente.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>
+"""
 
 DASHBOARD_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 <div class="space-y-6">
@@ -517,8 +707,13 @@ def login():
     if request.method == 'POST':
         user = request.form.get('usuario')
         senha = request.form.get('senha')
-        conn = sqlite3.connect(BANCO_DADOS)
-        u = conn.execute("SELECT * FROM Usuarios WHERE Nome=? AND Senha=?", (user, senha)).fetchone()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if DATABASE_URL:
+            cursor.execute("SELECT * FROM Usuarios WHERE Nome=%s AND Senha=%s", (user, senha))
+        else:
+            cursor.execute("SELECT * FROM Usuarios WHERE Nome=? AND Senha=?", (user, senha))
+        u = cursor.fetchone()
         conn.close()
         if u:
             session['usuario'] = user
@@ -534,21 +729,205 @@ def logout():
 @app.route('/')
 def index():
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    produtos = conn.execute("SELECT * FROM Produtos").fetchall()
-    
-    mes_atual = datetime.now().strftime("/%m/%Y")
-    vendas_mes = conn.execute("SELECT ValorPago FROM Vendas WHERE DataCompra LIKE ?", (f"%{mes_atual}%",)).fetchall()
-    receita_mes = sum([v[0] for v in vendas_mes if v[0] is not None])
-    conn.close()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM Produtos")
+    produtos = cursor.fetchall()
+
+    cursor.execute("SELECT SUM(ValorPago) FROM Vendas")
+    res_vendas = cursor.fetchone()
+    receita_mes = res_vendas[0] if res_vendas and res_vendas[0] else 0.0
 
     total_cadastrados = len(produtos)
-    valor_estoque = sum([float(p[6]) for p in produtos if len(p)>6 and p[6] is not None])
-    estoque_baixo = sum([1 for p in produtos if len(p)>4 and p[4] is not None and float(p[4]) <= 2])
+    valor_estoque = sum((p[4] or 0.0) * (p[6] or 0.0) for p in produtos)
+    estoque_baixo = sum(1 for p in produtos if (p[4] or 0.0) <= 2)
+    conn.close()
 
     return render_template_string(INDEX_HTML, produtos=produtos, total_cadastrados=total_cadastrados, valor_estoque=valor_estoque, receita_mes=receita_mes, estoque_baixo=estoque_baixo)
 
-@app.route('/produto/novo', methods=['GET', 'POST'])
+@app.route('/clientes')
+def clientes():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM Clientes")
+    clientes_list = cursor.fetchall()
+    conn.close()
+    return render_template_string(CLIENTES_HTML, clientes=clientes_list)
+
+@app.route('/novo_cliente', methods=['GET', 'POST'])
+def novo_cliente():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    if request.method == 'POST':
+        nome = request.form.get('nome')
+        endereco = request.form.get('endereco')
+        telefone = request.form.get('telefone')
+        modelo = request.form.get('modelo')
+        ano = request.form.get('ano')
+        placa = request.form.get('placa')
+        km = request.form.get('km')
+        data = request.form.get('data') or datetime.now().strftime('%d/%m/%Y')
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if DATABASE_URL:
+            cursor.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, KM, Placa, DataEntrada) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", (nome, endereco, telefone, modelo, ano, km, placa, data))
+        else:
+            cursor.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, KM, Placa, DataEntrada) VALUES (?,?,?,?,?,?,?,?)", (nome, endereco, telefone, modelo, ano, km, placa, data))
+        conn.commit()
+        conn.close()
+        flash('Cliente cadastrado com sucesso!', 'success')
+        return redirect(url_for('clientes'))
+    return render_template_string(FORM_CLIENTE_HTML, c=None, titulo="Novo Cliente")
+
+@app.route('/editar_cliente/<int:id>', methods=['GET', 'POST'])
+def editar_cliente(id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if request.method == 'POST':
+        nome = request.form.get('nome')
+        endereco = request.form.get('endereco')
+        telefone = request.form.get('telefone')
+        modelo = request.form.get('modelo')
+        ano = request.form.get('ano')
+        placa = request.form.get('placa')
+        km = request.form.get('km')
+        data = request.form.get('data')
+
+        if DATABASE_URL:
+            cursor.execute("UPDATE Clientes SET Nome=%s, Endereco=%s, Telefone=%s, ModeloMoto=%s, AnoMoto=%s, Placa=%s, KM=%s, DataEntrada=%s WHERE ID=%s", (nome, endereco, telefone, modelo, ano, placa, km, data, id))
+        else:
+            cursor.execute("UPDATE Clientes SET Nome=?, Endereco=?, Telefone=?, ModeloMoto=?, AnoMoto=?, Placa=?, KM=?, DataEntrada=? WHERE ID=?", (nome, endereco, telefone, modelo, ano, placa, km, data, id))
+        conn.commit()
+        conn.close()
+        flash('Cliente atualizado com sucesso!', 'success')
+        return redirect(url_for('clientes'))
+
+    if DATABASE_URL:
+        cursor.execute("SELECT * FROM Clientes WHERE ID=%s", (id,))
+    else:
+        cursor.execute("SELECT * FROM Clientes WHERE ID=?", (id,))
+    c = cursor.fetchone()
+    conn.close()
+    return render_template_string(FORM_CLIENTE_HTML, c=c, titulo="Editar Cliente")
+
+@app.route('/excluir_cliente/<int:id>')
+def excluir_cliente(id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if DATABASE_URL:
+        cursor.execute("DELETE FROM Clientes WHERE ID=%s", (id,))
+        cursor.execute("DELETE FROM Vendas WHERE ClienteID=%s", (id,))
+    else:
+        cursor.execute("DELETE FROM Clientes WHERE ID=?", (id,))
+        cursor.execute("DELETE FROM Vendas WHERE ClienteID=?", (id,))
+    conn.commit()
+    conn.close()
+    flash('Cliente excluído com sucesso!', 'success')
+    return redirect(url_for('clientes'))
+
+@app.route('/lancamento_servico/<int:cliente_id>', methods=['GET', 'POST'])
+def lancamento_servico(cliente_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if DATABASE_URL:
+        cursor.execute("SELECT * FROM Clientes WHERE ID=%s", (cliente_id,))
+    else:
+        cursor.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cliente = cursor.fetchone()
+
+    if request.method == 'POST':
+        servico_desc = request.form.get('servico_desc')
+        valor_total = float(request.form.get('valor_total') or 0.0)
+        valor_pago = float(request.form.get('valor_pago') or 0.0)
+        forma_pagto = request.form.get('forma_pagto')
+        obs = request.form.get('obs')
+        data_compra = datetime.now().strftime('%d/%m/%Y %H:%M')
+
+        if DATABASE_URL:
+            cursor.execute("INSERT INTO Vendas (ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (%s, %s, %s, %s, %s, %s, %s)", (cliente_id, servico_desc, valor_total, valor_pago, data_compra, forma_pagto, obs))
+        else:
+            cursor.execute("INSERT INTO Vendas (ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (?,?,?,?,?,?,?)", (cliente_id, servico_desc, valor_total, valor_pago, data_compra, forma_pagto, obs))
+        conn.commit()
+        conn.close()
+        flash('Serviço lançado com sucesso!', 'success')
+        return redirect(url_for('clientes'))
+
+    conn.close()
+    return render_template_string(LANCAMENTO_SERVICO_HTML, cliente=cliente)
+
+@app.route('/historico/<int:cliente_id>')
+def historico_cliente(cliente_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if DATABASE_URL:
+        cursor.execute("SELECT * FROM Clientes WHERE ID=%s", (cliente_id,))
+    else:
+        cursor.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cliente = cursor.fetchone()
+
+    if DATABASE_URL:
+        cursor.execute("SELECT * FROM Vendas WHERE ClienteID=%s ORDER BY ID DESC", (cliente_id,))
+    else:
+        cursor.execute("SELECT * FROM Vendas WHERE ClienteID=? ORDER BY ID DESC", (cliente_id,))
+    vendas = cursor.fetchall()
+    conn.close()
+    return render_template_string(HISTORICO_HTML, cliente=cliente, vendas=vendas)
+
+@app.route('/extrato/<int:cliente_id>')
+def extrato_cliente(cliente_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if DATABASE_URL:
+        cursor.execute("SELECT * FROM Clientes WHERE ID=%s", (cliente_id,))
+    else:
+        cursor.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cliente = cursor.fetchone()
+
+    if DATABASE_URL:
+        cursor.execute("SELECT * FROM Vendas WHERE ClienteID=%s ORDER BY ID DESC", (cliente_id,))
+    else:
+        cursor.execute("SELECT * FROM Vendas WHERE ClienteID=? ORDER BY ID DESC", (cliente_id,))
+    vendas = cursor.fetchall()
+    conn.close()
+
+    # Considera débito o que foi vendido mas ainda não totalmente pago
+    debitos = [v for v in vendas if (v[3] or 0.0) > (v[4] or 0.0)]
+    total_devedor = sum((v[3] or 0.0) - (v[4] or 0.0) for v in debitos)
+
+    return render_template_string(EXTRATO_HTML, cliente=cliente, debitos=debitos, total_devedor=total_devedor)
+
+@app.route('/relatorio-desempenho/<int:cliente_id>')
+def relatorio_desempenho(cliente_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if DATABASE_URL:
+        cursor.execute("SELECT * FROM Clientes WHERE ID=%s", (cliente_id,))
+    else:
+        cursor.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cliente = cursor.fetchone()
+
+    if DATABASE_URL:
+        cursor.execute("SELECT * FROM Vendas WHERE ClienteID=%s ORDER BY ID DESC", (cliente_id,))
+    else:
+        cursor.execute("SELECT * FROM Vendas WHERE ClienteID=? ORDER BY ID DESC", (cliente_id,))
+    servicos = cursor.fetchall()
+    conn.close()
+
+    total_gasto = sum((s[3] or 0.0) for s in servicos)
+    total_visitas = len(servicos)
+    media_gasto = total_gasto / total_visitas if total_visitas > 0 else 0.0
+    ultima_visita = servicos[0][5] if servicos and len(servicos[0]) > 5 else None
+
+    return render_template_string(RELATORIO_DESEMPENHO_HTML, cliente=cliente, servicos=servicos, total_gasto=total_gasto, total_visitas=total_visitas, media_gasto=media_gasto, ultima_visita=ultima_visita)
+
+@app.route('/novo_produto', methods=['GET', 'POST'])
 def novo_produto():
     if 'usuario' not in session: return redirect(url_for('login'))
     if request.method == 'POST':
@@ -560,19 +939,23 @@ def novo_produto():
         unidade = request.form.get('unidade')
         custo = float(request.form.get('custo') or 0.0)
 
-        conn = sqlite3.connect(BANCO_DADOS)
-        conn.execute("INSERT OR REPLACE INTO Produtos (ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                     (pid, nome, desc, preco, qtd, unidade, custo))
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if DATABASE_URL:
+            cursor.execute("INSERT INTO Produtos (ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra) VALUES (%s, %s, %s, %s, %s, %s, %s)", (pid, nome, desc, preco, qtd, unidade, custo))
+        else:
+            cursor.execute("INSERT INTO Produtos VALUES (?,?,?,?,?,?,?)", (pid, nome, desc, preco, qtd, unidade, custo))
         conn.commit()
         conn.close()
-        flash('Produto salvo com sucesso!', 'success')
+        flash('Produto cadastrado com sucesso!', 'success')
         return redirect(url_for('index'))
-    return render_template_string(FORM_PRODUTO_HTML, titulo="Novo Produto/Insumo", p=None)
+    return render_template_string(FORM_PRODUTO_HTML, p=None, titulo="Novo Produto / Insumo")
 
-@app.route('/produto/editar/<id>', methods=['GET', 'POST'])
+@app.route('/editar_produto/<id>', methods=['GET', 'POST'])
 def editar_produto(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
+    conn = get_db_connection()
+    cursor = conn.cursor()
     if request.method == 'POST':
         nome = request.form.get('nome')
         desc = request.form.get('desc')
@@ -581,171 +964,100 @@ def editar_produto(id):
         unidade = request.form.get('unidade')
         custo = float(request.form.get('custo') or 0.0)
 
-        conn.execute("UPDATE Produtos SET NomeProduto=?, Descricao=?, Preco=?, QtdEstoque=?, UnidadeMedida=?, CustoCompra=? WHERE ID=?",
-                     (nome, desc, preco, qtd, unidade, custo, id))
+        if DATABASE_URL:
+            cursor.execute("UPDATE Produtos SET NomeProduto=%s, Descricao=%s, Preco=%s, QtdEstoque=%s, UnidadeMedida=%s, CustoCompra=%s WHERE ID=%s", (nome, desc, preco, qtd, unidade, custo, id))
+        else:
+            cursor.execute("UPDATE Produtos SET NomeProduto=?, Descricao=?, Preco=?, QtdEstoque=?, UnidadeMedida=?, CustoCompra=? WHERE ID=?", (nome, desc, preco, qtd, unidade, custo, id))
         conn.commit()
         conn.close()
         flash('Produto atualizado com sucesso!', 'success')
         return redirect(url_for('index'))
-    
-    p = conn.execute("SELECT * FROM Produtos WHERE ID=?", (id,)).fetchone()
-    conn.close()
-    return render_template_string(FORM_PRODUTO_HTML, titulo="Editar Produto/Insumo", p=p)
 
-@app.route('/produto/excluir/<id>')
+    if DATABASE_URL:
+        cursor.execute("SELECT * FROM Produtos WHERE ID=%s", (id,))
+    else:
+        cursor.execute("SELECT * FROM Produtos WHERE ID=?", (id,))
+    p = cursor.fetchone()
+    conn.close()
+    return render_template_string(FORM_PRODUTO_HTML, p=p, titulo="Editar Produto / Insumo")
+
+@app.route('/excluir_produto/<id>')
 def excluir_produto(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    conn.execute("DELETE FROM Produtos WHERE ID=?", (id,))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if DATABASE_URL:
+        cursor.execute("DELETE FROM Produtos WHERE ID=%s", (id,))
+    else:
+        cursor.execute("DELETE FROM Produtos WHERE ID=?", (id,))
     conn.commit()
     conn.close()
-    flash('Produto excluído!', 'success')
+    flash('Produto excluído com sucesso!', 'success')
     return redirect(url_for('index'))
-
-@app.route('/clientes')
-def clientes():
-    if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    clientes = conn.execute("SELECT * FROM Clientes").fetchall()
-    conn.close()
-    return render_template_string(CLIENTES_HTML, clientes=clientes)
-
-@app.route('/cliente/novo', methods=['GET', 'POST'])
-def novo_cliente():
-    if 'usuario' not in session: return redirect(url_for('login'))
-    if request.method == 'POST':
-        nome = request.form.get('nome')
-        endereco = request.form.get('endereco')
-        telefone = request.form.get('telefone')
-        modelo = request.form.get('modelo')
-        ano = request.form.get('ano')
-        km = request.form.get('km')
-        placa = request.form.get('placa')
-        data = request.form.get('data')
-
-        conn = sqlite3.connect(BANCO_DADOS)
-        conn.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, KM, Placa, DataEntrada) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                     (nome, endereco, telefone, modelo, ano, km, placa, data))
-        conn.commit()
-        conn.close()
-        flash('Cliente cadastrado com sucesso!', 'success')
-        return redirect(url_for('clientes'))
-    return render_template_string(FORM_CLIENTE_HTML, titulo="Novo Cliente", c=None)
-
-@app.route('/cliente/editar/<int:id>', methods=['GET', 'POST'])
-def editar_cliente(id):
-    if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    if request.method == 'POST':
-        nome = request.form.get('nome')
-        endereco = request.form.get('endereco')
-        telefone = request.form.get('telefone')
-        modelo = request.form.get('modelo')
-        ano = request.form.get('ano')
-        km = request.form.get('km')
-        placa = request.form.get('placa')
-        data = request.form.get('data')
-
-        conn.execute("UPDATE Clientes SET Nome=?, Endereco=?, Telefone=?, ModeloMoto=?, AnoMoto=?, KM=?, Placa=?, DataEntrada=? WHERE ID=?",
-                     (nome, endereco, telefone, modelo, ano, km, placa, data, id))
-        conn.commit()
-        conn.close()
-        flash('Cliente atualizado com sucesso!', 'success')
-        return redirect(url_for('clientes'))
-    
-    c = conn.execute("SELECT * FROM Clientes WHERE ID=?", (id,)).fetchone()
-    conn.close()
-    return render_template_string(FORM_CLIENTE_HTML, titulo="Editar Cliente", c=c)
-
-@app.route('/cliente/excluir/<int:id>')
-def excluir_cliente(id):
-    if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    conn.execute("DELETE FROM Clientes WHERE ID=?", (id,))
-    conn.execute("DELETE FROM Vendas WHERE ClienteID=?", (id,))
-    conn.commit()
-    conn.close()
-    flash('Cliente excluído com sucesso!', 'success')
-    return redirect(url_for('clientes'))
-
-@app.route('/servico/lancar/<int:cliente_id>', methods=['GET', 'POST'])
-def lancamento_servico(cliente_id):
-    if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    cliente = conn.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,)).fetchone()
-    
-    if request.method == 'POST':
-        servico_desc = request.form.get('servico_desc')
-        val_total = float(request.form.get('valor_total') or 0.0)
-        val_pago = float(request.form.get('valor_pago') or 0.0)
-        forma_pagto = request.form.get('forma_pagto')
-        obs = request.form.get('obs')
-        data_atual = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-        conn.execute("INSERT INTO Vendas (ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                     (cliente_id, servico_desc, val_total, val_pago, data_atual, forma_pagto, obs))
-        conn.commit()
-        conn.close()
-        flash('Serviço lançado com sucesso!', 'success')
-        return redirect(url_for('clientes'))
-    
-    conn.close()
-    return render_template_string(LANCAMENTO_SERVICO_HTML, cliente=cliente)
-
-@app.route('/cliente/historico/<int:cliente_id>')
-def historico_cliente(cliente_id):
-    if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    cliente = conn.execute("SELECT * FROM Clientes WHERE ID=?", (cliente_id,)).fetchone()
-    vendas = conn.execute("SELECT * FROM Vendas WHERE ClienteID=? ORDER BY ID DESC", (cliente_id,)).fetchall()
-    conn.close()
-    return render_template_string(HISTORICO_HTML, cliente=cliente, vendas=vendas)
 
 @app.route('/despesas')
 def despesas():
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    despesas = conn.execute("SELECT * FROM Despesas ORDER BY ID DESC").fetchall()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM Despesas")
+    despesas_list = cursor.fetchall()
     conn.close()
-    return render_template_string(DESPESAS_HTML, despesas=despesas)
+    return render_template_string(DESPESAS_HTML, despesas=despesas_list)
 
-@app.route('/despesa/nova', methods=['GET', 'POST'])
+@app.route('/nova_despesa', methods=['GET', 'POST'])
 def nova_despesa():
     if 'usuario' not in session: return redirect(url_for('login'))
     if request.method == 'POST':
         desc = request.form.get('descricao')
         cat = request.form.get('categoria')
-        val = float(request.form.get('valor') or 0.0)
+        valor = float(request.form.get('valor') or 0.0)
         data = request.form.get('data')
         obs = request.form.get('obs')
 
-        conn = sqlite3.connect(BANCO_DADOS)
-        conn.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (?, ?, ?, ?, ?)",
-                     (desc, cat, val, data, obs))
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if DATABASE_URL:
+            cursor.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (%s, %s, %s, %s, %s)", (desc, cat, valor, data, obs))
+        else:
+            cursor.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (?,?,?,?,?)", (desc, cat, valor, data, obs))
         conn.commit()
         conn.close()
-        flash('Despesa cadastrada!', 'success')
+        flash('Despesa cadastrada com sucesso!', 'success')
         return redirect(url_for('despesas'))
-    return render_template_string(FORM_DESPESA_HTML, hoje=datetime.now().strftime("%d/%m/%Y"))
+    hoje = datetime.now().strftime('%d/%m/%Y')
+    return render_template_string(FORM_DESPESA_HTML, hoje=hoje)
 
-@app.route('/despesa/excluir/<int:id>')
+@app.route('/excluir_despesa/<int:id>')
 def excluir_despesa(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    conn.execute("DELETE FROM Despesas WHERE ID=?", (id,))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if DATABASE_URL:
+        cursor.execute("DELETE FROM Despesas WHERE ID=%s", (id,))
+    else:
+        cursor.execute("DELETE FROM Despesas WHERE ID=?", (id,))
     conn.commit()
     conn.close()
-    flash('Despesa excluída!', 'success')
+    flash('Despesa excluída com sucesso!', 'success')
     return redirect(url_for('despesas'))
 
 @app.route('/dashboard')
 def dashboard():
     if 'usuario' not in session: return redirect(url_for('login'))
-    conn = sqlite3.connect(BANCO_DADOS)
-    vendas = conn.execute("SELECT SUM(ValorPago) FROM Vendas").fetchone()[0] or 0.0
-    despesas = conn.execute("SELECT SUM(Valor) FROM Despesas").fetchone()[0] or 0.0
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT SUM(ValorPago) FROM Vendas")
+    res_v = cursor.fetchone()
+    tot_vendas = res_v[0] if res_v and res_v[0] else 0.0
+
+    cursor.execute("SELECT SUM(Valor) FROM Despesas")
+    res_d = cursor.fetchone()
+    tot_despesas = res_d[0] if res_d and res_d[0] else 0.0
+
     conn.close()
-    return render_template_string(DASHBOARD_HTML, tot_vendas=vendas, tot_despesas=despesas)
+    return render_template_string(DASHBOARD_HTML, tot_vendas=tot_vendas, tot_despesas=tot_despesas)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(debug=True)
