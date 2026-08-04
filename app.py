@@ -15,10 +15,8 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_db_connection():
     if DATABASE_URL:
-        # Conexão PostgreSQL para o Render
         return psycopg.connect(DATABASE_URL)
     else:
-        # Conexão SQLite para ambiente local
         conexao = sqlite3.connect("LavaRapidoAutoLub.db", timeout=30)
         return conexao
 
@@ -85,6 +83,12 @@ def init_db():
                 Observacao TEXT
             )
         """)
+        
+        usuarios_padrao = [('admin', '123'), ('maironxd', '14125'), ('luana', '14125'), ('josue', '123')]
+        for user, senha in usuarios_padrao:
+            cursor.execute("SELECT * FROM Usuarios WHERE Nome=%s", (user,))
+            if not cursor.fetchone():
+                cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (%s, %s)", (user, senha))
     else:
         # Tabelas para SQLite (Local)
         cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
@@ -111,18 +115,17 @@ def init_db():
 
         cursor.execute("CREATE TABLE IF NOT EXISTS Despesas(ID INTEGER PRIMARY KEY AUTOINCREMENT, Descricao TEXT, Categoria TEXT, Valor REAL, DataDespesa TEXT, Observacao TEXT)")
 
-    usuarios_padrao = [('admin', '123'), ('maironxd', '14125'), ('luana', '14125'), ('josue', '123')]
-    for user, senha in usuarios_padrao:
-        cursor.execute("SELECT * FROM Usuarios WHERE Nome=?", (user,))
-        if not cursor.fetchone():
-            cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (?, ?)", (user, senha))
+        usuarios_padrao = [('admin', '123'), ('maironxd', '14125'), ('luana', '14125'), ('josue', '123')]
+        for user, senha in usuarios_padrao:
+            cursor.execute("SELECT * FROM Usuarios WHERE Nome=?", (user,))
+            if not cursor.fetchone():
+                cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (?, ?)", (user, senha))
 
     conexao.commit()
     conexao.close()
 
 init_db()
 
-# TEMPLATES HTML EMBUTIDOS COM DESIGN MODERNO (Tailwind CSS)
 BASE_LAYOUT = """
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -197,7 +200,6 @@ INDEX_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
         <a href="{{ url_for('novo_produto') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-plus mr-2"></i> Novo Produto/Insumo</a>
     </div>
 
-    <!-- Cards Resumo -->
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
             <p class="text-slate-400 text-xs font-bold uppercase">Cadastrados</p>
@@ -217,7 +219,6 @@ INDEX_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
         </div>
     </div>
 
-    <!-- Tabela Produtos -->
     <div class="bg-slate-900 rounded-xl border border-slate-800 shadow overflow-hidden">
         <table class="w-full text-left border-collapse">
             <thead>
@@ -489,7 +490,6 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
             <input type="text" name="servico_desc" required placeholder="Ex: Lavagem completa + Troca de Óleo" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
         </div>
 
-        <!-- Seletor dinâmico de múltiplos produtos por código -->
         <div class="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
             <h3 class="text-sm font-bold text-cyan-400 uppercase tracking-wide"><i class="fa-solid fa-boxes-stacked mr-1"></i> Adicionar Produtos/Insumos por Código</h3>
             <div id="itens-container" class="space-y-3">
@@ -607,7 +607,6 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 </div>
 """)
 
-# ROTAS PRINCIPAIS DO FLASK
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
