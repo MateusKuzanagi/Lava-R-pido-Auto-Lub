@@ -1,5 +1,6 @@
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash, send_file
-import psycopg2
+import sqlite3
+import psycopg
 from datetime import datetime
 import os
 from io import BytesIO
@@ -9,119 +10,114 @@ from reportlab.lib.pagesizes import letter
 app = Flask(__name__)
 app.secret_key = 'lava_rapido_secret_key_autolub'
 
-# CONEXÃO COM O SUPABASE / POSTGRESQL
-# Substitua pelos dados da sua string de conexão do Supabase (Settings -> Database -> Connection string -> URI)
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:sua_senha@db.seu-projeto.supabase.co:5432/postgres")
+# Detecta se está no Render usando PostgreSQL ou rodando local com SQLite
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
+    if DATABASE_URL:
+        # Conexão PostgreSQL para o Render
+        return psycopg.connect(DATABASE_URL)
+    else:
+        # Conexão SQLite para ambiente local
+        conexao = sqlite3.connect("LavaRapidoAutoLub.db", timeout=30)
+        return conexao
 
 def init_db():
     conexao = get_db_connection()
     cursor = conexao.cursor()
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS Usuarios(
-            ID SERIAL PRIMARY KEY, 
-            Nome TEXT UNIQUE, 
-            Senha TEXT
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS Clientes(
-            ID SERIAL PRIMARY KEY, 
-            Nome TEXT, 
-            Endereco TEXT, 
-            Telefone TEXT, 
-            ModeloMoto TEXT, 
-            AnoMoto TEXT, 
-            KM TEXT, 
-            Placa TEXT,
-            KMEntrada TEXT,
-            KMSaida TEXT,
-            DataEntrada TEXT,
-            DataSaida TEXT
-        )
-    """)
+    if DATABASE_URL:
+        # Tabelas para PostgreSQL (Render)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Usuarios(
+                ID SERIAL PRIMARY KEY, 
+                Nome TEXT UNIQUE, 
+                Senha TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Clientes(
+                ID SERIAL PRIMARY KEY, 
+                Nome TEXT, 
+                Endereco TEXT, 
+                Telefone TEXT, 
+                ModeloMoto TEXT, 
+                AnoMoto TEXT, 
+                KM TEXT, 
+                Placa TEXT,
+                KMEntrada TEXT,
+                KMSaida TEXT,
+                DataEntrada TEXT,
+                DataSaida TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Vendas(
+                ID SERIAL PRIMARY KEY, 
+                ClienteID INTEGER, 
+                Servico TEXT, 
+                ValorTotal REAL, 
+                ValorPago REAL, 
+                DataCompra TEXT,
+                FormaPagamento TEXT,
+                Observacao TEXT,
+                CustoInsumos TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Produtos(
+                ID TEXT PRIMARY KEY, 
+                NomeProduto TEXT, 
+                Descricao TEXT, 
+                Preco REAL, 
+                QtdEstoque REAL DEFAULT 0.0, 
+                UnidadeMedida TEXT DEFAULT 'un', 
+                CustoCompra REAL DEFAULT 0.0
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Despesas(
+                ID SERIAL PRIMARY KEY, 
+                Descricao TEXT, 
+                Categoria TEXT, 
+                Valor REAL, 
+                DataDespesa TEXT, 
+                Observacao TEXT
+            )
+        """)
+    else:
+        # Tabelas para SQLite (Local)
+        cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
+        
+        colunas_novas_clientes = ["ModeloMoto", "AnoMoto", "KM", "KMEntrada", "KMSaida", "DataEntrada", "DataSaida", "Placa"]
+        for col in colunas_novas_clientes:
+            try: cursor.execute(f"ALTER TABLE Clientes ADD COLUMN {col} TEXT")
+            except Exception: pass
 
-    # Garantir colunas caso a tabela já exista sem alguma delas
-    colunas_novas_clientes = [
-        ("ModeloMoto", "TEXT"), ("AnoMoto", "TEXT"), ("KM", "TEXT"), 
-        ("KMEntrada", "TEXT"), ("KMSaida", "TEXT"), ("DataEntrada", "TEXT"), 
-        ("DataSaida", "TEXT"), ("Placa", "TEXT")
-    ]
-    for col, tipo in colunas_novas_clientes:
-        try:
-            cursor.execute(f"ALTER TABLE Clientes ADD COLUMN IF NOT EXISTS {col} {tipo}")
-        except Exception:
-            conexao.rollback()
+        cursor.execute("CREATE TABLE IF NOT EXISTS Vendas(ID INTEGER PRIMARY KEY AUTOINCREMENT, ClienteID INTEGER, Servico TEXT, ValorTotal REAL, ValorPago REAL, DataCompra TEXT)")
+        
+        colunas_novas_vendas = ["FormaPagamento", "Observacao", "CustoInsumos"]
+        for col in colunas_novas_vendas:
+            try: cursor.execute(f"ALTER TABLE Vendas ADD COLUMN {col} TEXT")
+            except Exception: pass
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS Vendas(
-            ID SERIAL PRIMARY KEY, 
-            ClienteID INTEGER, 
-            Servico TEXT, 
-            ValorTotal REAL, 
-            ValorPago REAL, 
-            DataCompra TEXT,
-            FormaPagamento TEXT,
-            Observacao TEXT,
-            CustoInsumos TEXT
-        )
-    """)
+        cursor.execute("CREATE TABLE IF NOT EXISTS Produtos(ID TEXT PRIMARY KEY, NomeProduto TEXT, Descricao TEXT, Preco REAL, QtdEstoque REAL DEFAULT 0.0, UnidadeMedida TEXT DEFAULT 'un', CustoCompra REAL DEFAULT 0.0)")
+        
+        colunas_novas_produtos = ["QtdEstoque", "UnidadeMedida", "CustoCompra"]
+        for col in colunas_novas_produtos:
+            try: cursor.execute(f"ALTER TABLE Produtos ADD COLUMN {col} TEXT")
+            except Exception: pass
 
-    colunas_novas_vendas = [
-        ("FormaPagamento", "TEXT"), ("Observacao", "TEXT"), ("CustoInsumos", "TEXT")
-    ]
-    for col, tipo in colunas_novas_vendas:
-        try:
-            cursor.execute(f"ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS {col} {tipo}")
-        except Exception:
-            conexao.rollback()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS Produtos(
-            ID TEXT PRIMARY KEY, 
-            NomeProduto TEXT, 
-            Descricao TEXT, 
-            Preco REAL, 
-            QtdEstoque REAL DEFAULT 0.0, 
-            UnidadeMedida TEXT DEFAULT 'un', 
-            CustoCompra REAL DEFAULT 0.0
-        )
-    """)
-
-    colunas_novas_produtos = [
-        ("QtdEstoque", "REAL DEFAULT 0.0"), 
-        ("UnidadeMedida", "TEXT DEFAULT 'un'"), 
-        ("CustoCompra", "REAL DEFAULT 0.0")
-    ]
-    for col, tipo in colunas_novas_produtos:
-        try:
-            cursor.execute(f"ALTER TABLE Produtos ADD COLUMN IF NOT EXISTS {col} {tipo}")
-        except Exception:
-            conexao.rollback()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS Despesas(
-            ID SERIAL PRIMARY KEY, 
-            Descricao TEXT, 
-            Categoria TEXT, 
-            Valor REAL, 
-            DataDespesa TEXT, 
-            Observacao TEXT
-        )
-    """)
+        cursor.execute("CREATE TABLE IF NOT EXISTS Despesas(ID INTEGER PRIMARY KEY AUTOINCREMENT, Descricao TEXT, Categoria TEXT, Valor REAL, DataDespesa TEXT, Observacao TEXT)")
 
     usuarios_padrao = [('admin', '123'), ('maironxd', '14125'), ('luana', '14125'), ('josue', '123')]
     for user, senha in usuarios_padrao:
-        cursor.execute("SELECT * FROM Usuarios WHERE Nome=%s", (user,))
+        cursor.execute("SELECT * FROM Usuarios WHERE Nome=?", (user,))
         if not cursor.fetchone():
-            cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (%s, %s)", (user, senha))
+            cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (?, ?)", (user, senha))
 
     conexao.commit()
-    cursor.close()
     conexao.close()
 
 init_db()
@@ -611,7 +607,7 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 </div>
 """)
 
-# ROTAS PRINCIPAIS DO FLASK COM ADAPTAÇÃO POSTGRESQL (%s nos placeholders)
+# ROTAS PRINCIPAIS DO FLASK
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -619,9 +615,8 @@ def login():
         senha = request.form['senha']
         conexao = get_db_connection()
         cursor = conexao.cursor()
-        cursor.execute("SELECT * FROM Usuarios WHERE Nome=%s AND Senha=%s", (usuario, senha))
+        cursor.execute("SELECT * FROM Usuarios WHERE Nome=%s AND Senha=%s" if DATABASE_URL else "SELECT * FROM Usuarios WHERE Nome=? AND Senha=?", (usuario, senha))
         user = cursor.fetchone()
-        cursor.close()
         conexao.close()
         if user:
             session['usuario'] = usuario
@@ -660,7 +655,6 @@ def index():
     cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos")
     produtos = cursor.fetchall()
 
-    cursor.close()
     conexao.close()
 
     return render_template_string(INDEX_HTML, 
@@ -685,13 +679,15 @@ def novo_produto():
         conexao = get_db_connection()
         cursor = conexao.cursor()
         try:
-            cursor.execute("INSERT INTO Produtos VALUES (%s, %s, %s, %s, %s, %s, %s)", (id_prod, nome, desc, preco, qtd, unidade, custo))
+            if DATABASE_URL:
+                cursor.execute("INSERT INTO Produtos (ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra) VALUES (%s, %s, %s, %s, %s, %s, %s)", 
+                               (id_prod, nome, desc, preco, qtd, unidade, custo))
+            else:
+                cursor.execute("INSERT INTO Produtos VALUES (?, ?, ?, ?, ?, ?, ?)", (id_prod, nome, desc, preco, qtd, unidade, custo))
             conexao.commit()
             flash('Produto cadastrado com sucesso!', 'success')
         except Exception:
-            conexao.rollback()
-            flash('Erro: Já existe um produto com este código ou dados inválidos!', 'error')
-        cursor.close()
+            flash('Erro: Já existe um produto com este código!', 'error')
         conexao.close()
         return redirect(url_for('index'))
     return render_template_string(FORM_PRODUTO_HTML, titulo="Novo Produto / Insumo", p=None)
@@ -709,17 +705,19 @@ def editar_produto(id):
         unidade = request.form['unidade']
         custo = float(request.form['custo'] or 0)
 
-        cursor.execute("UPDATE Produtos SET NomeProduto=%s, Descricao=%s, Preco=%s, QtdEstoque=%s, UnidadeMedida=%s, CustoCompra=%s WHERE ID=%s", 
-                       (nome, desc, preco, qtd, unidade, custo, id))
+        if DATABASE_URL:
+            cursor.execute("UPDATE Produtos SET NomeProduto=%s, Descricao=%s, Preco=%s, QtdEstoque=%s, UnidadeMedida=%s, CustoCompra=%s WHERE ID=%s", 
+                           (nome, desc, preco, qtd, unidade, custo, id))
+        else:
+            cursor.execute("UPDATE Produtos SET NomeProduto=?, Descricao=?, Preco=?, QtdEstoque=?, UnidadeMedida=?, CustoCompra=? WHERE ID=?", 
+                           (nome, desc, preco, qtd, unidade, custo, id))
         conexao.commit()
-        cursor.close()
         conexao.close()
         flash('Produto atualizado com sucesso!', 'success')
         return redirect(url_for('index'))
     
-    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=%s", (id,))
+    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=%s" if DATABASE_URL else "SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=?", (id,))
     p = cursor.fetchone()
-    cursor.close()
     conexao.close()
     return render_template_string(FORM_PRODUTO_HTML, titulo="Editar Produto / Insumo", p=p)
 
@@ -728,9 +726,8 @@ def excluir_produto(id):
     if 'usuario' not in session: return redirect(url_for('login'))
     conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("DELETE FROM Produtos WHERE ID=%s", (id,))
+    cursor.execute("DELETE FROM Produtos WHERE ID=%s" if DATABASE_URL else "DELETE FROM Produtos WHERE ID=?", (id,))
     conexao.commit()
-    cursor.close()
     conexao.close()
     flash('Produto excluído!', 'success')
     return redirect(url_for('index'))
@@ -742,7 +739,6 @@ def clientes():
     cursor = conexao.cursor()
     cursor.execute("SELECT ID, Nome, Endereco, Telefone, ModeloMoto, Placa, KM FROM Clientes")
     clientes = cursor.fetchall()
-    cursor.close()
     conexao.close()
     return render_template_string(CLIENTES_HTML, clientes=clientes)
 
@@ -761,10 +757,13 @@ def novo_cliente():
 
         conexao = get_db_connection()
         cursor = conexao.cursor()
-        cursor.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, Placa, KM, DataEntrada) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                       (nome, endereco, telefone, modelo, ano, placa, km, data))
+        if DATABASE_URL:
+            cursor.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, Placa, KM, DataEntrada) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                           (nome, endereco, telefone, modelo, ano, placa, km, data))
+        else:
+            cursor.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, Placa, KM, DataEntrada) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                           (nome, endereco, telefone, modelo, ano, placa, km, data))
         conexao.commit()
-        cursor.close()
         conexao.close()
         flash('Cliente cadastrado com sucesso!', 'success')
         return redirect(url_for('clientes'))
@@ -785,17 +784,19 @@ def editar_cliente(id):
         km = request.form['km']
         data = request.form['data']
 
-        cursor.execute("UPDATE Clientes SET Nome=%s, Endereco=%s, Telefone=%s, ModeloMoto=%s, AnoMoto=%s, Placa=%s, KM=%s, DataEntrada=%s WHERE ID=%s",
-                       (nome, endereco, telefone, modelo, ano, placa, km, data, id))
+        if DATABASE_URL:
+            cursor.execute("UPDATE Clientes SET Nome=%s, Endereco=%s, Telefone=%s, ModeloMoto=%s, AnoMoto=%s, Placa=%s, KM=%s, DataEntrada=%s WHERE ID=%s",
+                           (nome, endereco, telefone, modelo, ano, placa, km, data, id))
+        else:
+            cursor.execute("UPDATE Clientes SET Nome=?, Endereco=?, Telefone=?, ModeloMoto=?, AnoMoto=?, Placa=?, KM=?, DataEntrada=? WHERE ID=?",
+                           (nome, endereco, telefone, modelo, ano, placa, km, data, id))
         conexao.commit()
-        cursor.close()
         conexao.close()
         flash('Cliente atualizado com sucesso!', 'success')
         return redirect(url_for('clientes'))
 
-    cursor.execute("SELECT ID, Nome, Endereco, Telefone, ModeloMoto, AnoMoto, KM, Placa, DataEntrada FROM Clientes WHERE ID=%s", (id,))
+    cursor.execute("SELECT ID, Nome, Endereco, Telefone, ModeloMoto, AnoMoto, KM, Placa, DataEntrada FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT ID, Nome, Endereco, Telefone, ModeloMoto, AnoMoto, KM, Placa, DataEntrada FROM Clientes WHERE ID=?", (id,))
     c = cursor.fetchone()
-    cursor.close()
     conexao.close()
     return render_template_string(FORM_CLIENTE_HTML, titulo="Editar Cliente", c=c)
 
@@ -804,10 +805,13 @@ def excluir_cliente(id):
     if 'usuario' not in session: return redirect(url_for('login'))
     conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("DELETE FROM Clientes WHERE ID=%s", (id,))
-    cursor.execute("DELETE FROM Vendas WHERE ClienteID=%s", (id,))
+    if DATABASE_URL:
+        cursor.execute("DELETE FROM Clientes WHERE ID=%s", (id,))
+        cursor.execute("DELETE FROM Vendas WHERE ClienteID=%s", (id,))
+    else:
+        cursor.execute("DELETE FROM Clientes WHERE ID=?", (id,))
+        cursor.execute("DELETE FROM Vendas WHERE ClienteID=?", (id,))
     conexao.commit()
-    cursor.close()
     conexao.close()
     flash('Cliente e histórico removidos!', 'success')
     return redirect(url_for('clientes'))
@@ -819,7 +823,6 @@ def despesas():
     cursor = conexao.cursor()
     cursor.execute("SELECT ID, Descricao, Categoria, Valor, DataDespesa, Observacao FROM Despesas")
     despesas = cursor.fetchall()
-    cursor.close()
     conexao.close()
     return render_template_string(DESPESAS_HTML, despesas=despesas)
 
@@ -835,10 +838,13 @@ def nova_despesa():
 
         conexao = get_db_connection()
         cursor = conexao.cursor()
-        cursor.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (%s, %s, %s, %s, %s)",
-                       (desc, cat, valor, data, obs))
+        if DATABASE_URL:
+            cursor.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (%s, %s, %s, %s, %s)",
+                           (desc, cat, valor, data, obs))
+        else:
+            cursor.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (?, ?, ?, ?, ?)",
+                           (desc, cat, valor, data, obs))
         conexao.commit()
-        cursor.close()
         conexao.close()
         flash('Despesa registrada com sucesso!', 'success')
         return redirect(url_for('despesas'))
@@ -850,9 +856,8 @@ def excluir_despesa(id):
     if 'usuario' not in session: return redirect(url_for('login'))
     conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("DELETE FROM Despesas WHERE ID=%s", (id,))
+    cursor.execute("DELETE FROM Despesas WHERE ID=%s" if DATABASE_URL else "DELETE FROM Despesas WHERE ID=?", (id,))
     conexao.commit()
-    cursor.close()
     conexao.close()
     flash('Despesa excluída!', 'success')
     return redirect(url_for('despesas'))
@@ -878,23 +883,28 @@ def lancamento_servico(cliente_id):
             if cod:
                 try:
                     qtd_usada = float(qtd_str or 0)
-                    cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - %s WHERE ID = %s", (qtd_usada, cod))
+                    if DATABASE_URL:
+                        cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - %s WHERE ID = %s", (qtd_usada, cod))
+                    else:
+                        cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - ? WHERE ID = ?", (qtd_usada, cod))
                 except ValueError:
                     pass
 
-        cursor.execute("INSERT INTO Vendas (ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                       (cliente_id, servico_desc, valor_total, valor_pago, data_compra, forma_pagto, obs))
+        if DATABASE_URL:
+            cursor.execute("INSERT INTO Vendas (ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                           (cliente_id, servico_desc, valor_total, valor_pago, data_compra, forma_pagto, obs))
+        else:
+            cursor.execute("INSERT INTO Vendas (ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                           (cliente_id, servico_desc, valor_total, valor_pago, data_compra, forma_pagto, obs))
         conexao.commit()
-        cursor.close()
         conexao.close()
         flash('Serviço lançado com sucesso e estoque atualizado!', 'success')
         return redirect(url_for('historico_cliente', cliente_id=cliente_id))
 
-    cursor.execute("SELECT * FROM Clientes WHERE ID=%s", (cliente_id,))
+    cursor.execute("SELECT * FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
     cliente = cursor.fetchone()
     cursor.execute("SELECT ID, NomeProduto, Preco, QtdEstoque, UnidadeMedida FROM Produtos")
     produtos = cursor.fetchall()
-    cursor.close()
     conexao.close()
     return render_template_string(LANCAMENTO_SERVICO_HTML, cliente=cliente, produtos=produtos)
 
@@ -903,11 +913,10 @@ def historico_cliente(cliente_id):
     if 'usuario' not in session: return redirect(url_for('login'))
     conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("SELECT * FROM Clientes WHERE ID=%s", (cliente_id,))
+    cursor.execute("SELECT * FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
     cliente = cursor.fetchone()
-    cursor.execute("SELECT ID, ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao FROM Vendas WHERE ClienteID=%s", (cliente_id,))
+    cursor.execute("SELECT ID, ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao FROM Vendas WHERE ClienteID=%s" if DATABASE_URL else "SELECT ID, ClienteID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao FROM Vendas WHERE ClienteID=?", (cliente_id,))
     vendas = cursor.fetchall()
-    cursor.close()
     conexao.close()
     return render_template_string(HISTORICO_HTML, cliente=cliente, vendas=vendas)
 
@@ -916,12 +925,11 @@ def excluir_venda(id):
     if 'usuario' not in session: return redirect(url_for('login'))
     conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("SELECT ClienteID FROM Vendas WHERE ID=%s", (id,))
+    cursor.execute("SELECT ClienteID FROM Vendas WHERE ID=%s" if DATABASE_URL else "SELECT ClienteID FROM Vendas WHERE ID=?", (id,))
     res = cursor.fetchone()
     cliente_id = res[0] if res else None
-    cursor.execute("DELETE FROM Vendas WHERE ID=%s", (id,))
+    cursor.execute("DELETE FROM Vendas WHERE ID=%s" if DATABASE_URL else "DELETE FROM Vendas WHERE ID=?", (id,))
     conexao.commit()
-    cursor.close()
     conexao.close()
     flash('Lançamento excluído!', 'success')
     if cliente_id:
@@ -933,11 +941,10 @@ def gerar_pdf_cliente(cliente_id):
     if 'usuario' not in session: return redirect(url_for('login'))
     conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("SELECT * FROM Clientes WHERE ID=%s", (cliente_id,))
+    cursor.execute("SELECT * FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
     cliente = cursor.fetchone()
-    cursor.execute("SELECT ID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento FROM Vendas WHERE ClienteID=%s", (cliente_id,))
+    cursor.execute("SELECT ID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento FROM Vendas WHERE ClienteID=%s" if DATABASE_URL else "SELECT ID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento FROM Vendas WHERE ClienteID=?", (cliente_id,))
     vendas = cursor.fetchall()
-    cursor.close()
     conexao.close()
 
     buffer = BytesIO()
@@ -966,7 +973,6 @@ def dashboard():
     total_receitas = cursor.fetchone()[0] or 0.0
     cursor.execute("SELECT SUM(Valor) FROM Despesas")
     total_despesas = cursor.fetchone()[0] or 0.0
-    cursor.close()
     conexao.close()
     
     dashboard_html = BASE_LAYOUT.replace("{% block content %}{% endblock %}", f"""
