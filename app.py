@@ -104,7 +104,6 @@ def init_db():
         cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
         
-        # Adição de colunas novas em Clientes se não existirem
         colunas_novas_clientes = [
             ("CnpjCpf", "TEXT"), ("InscricaoMunicipal", "TEXT"), ("Email", "TEXT"), ("Cep", "TEXT"),
             ("ModeloMoto", "TEXT"), ("AnoMoto", "TEXT"), ("KM", "TEXT"), ("KMEntrada", "TEXT"), 
@@ -212,7 +211,10 @@ INDEX_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 <div class="space-y-6">
     <div class="flex justify-between items-center">
         <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-boxes-stacked text-cyan-400 mr-2"></i> Gestão de Produtos e Insumos</h1>
-        <a href="{{ url_for('novo_produto') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-plus mr-2"></i> Novo Produto/Insumo</a>
+        <div class="space-x-2 flex">
+            <a href="{{ url_for('gerar_pdf_estoque') }}" class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-file-pdf mr-2"></i> Exportar Estoque PDF</a>
+            <a href="{{ url_for('novo_produto') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-plus mr-2"></i> Novo Produto/Insumo</a>
+        </div>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -691,6 +693,74 @@ def index():
                                   valor_estoque=valor_estoque,
                                   receita_mes=receita_mes,
                                   estoque_baixo=estoque_baixo)
+
+@app.route('/estoque/pdf')
+def gerar_pdf_estoque():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida FROM Produtos")
+    produtos = cursor.fetchall()
+    conexao.close()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
+    
+    styles = getSampleStyleSheet()
+    normal_style = styles['Normal']
+    normal_style.fontSize = 9
+    normal_style.leading = 12
+
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=normal_style,
+        fontSize=14,
+        leading=16,
+        fontName='Helvetica-Bold',
+        alignment=1
+    )
+
+    elements.append(Paragraph("<b>Lava Rápido Auto Lub - Relatório de Estoque</b>", title_style))
+    elements.append(Paragraph(f"Data de Emissão: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", title_style))
+    elements.append(Spacer(1, 15))
+
+    # Tabela com Código, Nome/Produto, Descrição, Preço e Estoque
+    dados_tabela = [
+        [
+            Paragraph("<b>Código</b>", normal_style), 
+            Paragraph("<b>Produto / Insumo</b>", normal_style), 
+            Paragraph("<b>Descrição</b>", normal_style), 
+            Paragraph("<b>Preço Cobrado</b>", normal_style), 
+            Paragraph("<b>Estoque</b>", normal_style)
+        ]
+    ]
+
+    for p in produtos:
+        dados_tabela.append([
+            Paragraph(str(p[0]), normal_style),
+            Paragraph(str(p[1]), normal_style),
+            Paragraph(str(p[2] or '-'), normal_style),
+            Paragraph(f"R$ {p[3]:.2f}" if p[3] is not None else "R$ 0.00", normal_style),
+            Paragraph(f"{p[4]} {p[5] or 'un'}", normal_style)
+        ])
+
+    tabela = Table(dados_tabela, colWidths=[70, 120, 150, 90, 100])
+    tabela.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+        ('BOX', (0, 0), (-1, -1), 1, colors.black),
+        ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('PADDING', (0, 0), (-1, -1), 6),
+    ]))
+
+    elements.append(tabela)
+    doc.build(elements)
+    
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"relatorio_estoque_{datetime.now().strftime('%d-%m-%Y')}.pdf", mimetype='application/pdf')
 
 @app.route('/produto/novo', methods=['GET', 'POST'])
 def novo_produto():
