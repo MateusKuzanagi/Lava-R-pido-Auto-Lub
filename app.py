@@ -106,7 +106,6 @@ def init_db():
         cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
         
-        # Garante a existência das novas colunas na tabela Clientes existente
         colunas_novas_clientes = [
             ("TipoPessoa", "TEXT DEFAULT 'CPF'"),
             ("Documento", "TEXT"),
@@ -376,7 +375,6 @@ FORM_CLIENTE_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
     <h1 class="text-xl font-bold text-white mb-6"><i class="fa-solid fa-user text-cyan-400 mr-2"></i> {{ titulo }}</h1>
     <form method="POST" class="space-y-4">
         
-        <!-- Tipo de Pessoa -->
         <div>
             <label class="block text-sm font-medium text-slate-300 mb-1">Tipo de Cliente</label>
             <select name="tipo_pessoa" id="tipo_pessoa" onchange="alternarCamposPessoa()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
@@ -489,7 +487,6 @@ function alternarCamposPessoa() {
         campoInsc.classList.add('hidden');
     }
 }
-// Executa ao carregar a página caso seja edição
 window.onload = function() {
     alternarCamposPessoa();
 };
@@ -1114,7 +1111,6 @@ def gerar_nf(venda_id):
         "cep": "35568-000"
     }
     
-    # Mapeia dinamicamente com os dados reais do cliente cadastrado (CPF ou CNPJ)
     tomador = {
         "tipo": cliente[1] if cliente else "CPF",
         "nome": cliente[2] if cliente else "CLIENTE NÃO INFORMADO",
