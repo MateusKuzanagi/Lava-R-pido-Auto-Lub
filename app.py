@@ -40,9 +40,17 @@ def init_db():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS Clientes(
                 ID SERIAL PRIMARY KEY, 
+                TipoPessoa TEXT DEFAULT 'CPF',
                 Nome TEXT, 
+                Documento TEXT, 
+                InscMunicipal TEXT,
                 Endereco TEXT, 
+                Bairro TEXT,
+                Cidade TEXT,
+                Estado TEXT,
+                CEP TEXT,
                 Telefone TEXT, 
+                Email TEXT,
                 ModeloMoto TEXT, 
                 AnoMoto TEXT, 
                 KM TEXT, 
@@ -98,9 +106,27 @@ def init_db():
         cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
         
-        colunas_novas_clientes = ["ModeloMoto", "AnoMoto", "KM", "KMEntrada", "KMSaida", "DataEntrada", "DataSaida", "Placa"]
-        for col in colunas_novas_clientes:
-            try: cursor.execute(f"ALTER TABLE Clientes ADD COLUMN {col} TEXT")
+        # Garante a existência das novas colunas na tabela Clientes existente
+        colunas_novas_clientes = [
+            ("TipoPessoa", "TEXT DEFAULT 'CPF'"),
+            ("Documento", "TEXT"),
+            ("InscMunicipal", "TEXT"),
+            ("Bairro", "TEXT"),
+            ("Cidade", "TEXT"),
+            ("Estado", "TEXT"),
+            ("CEP", "TEXT"),
+            ("Email", "TEXT"),
+            ("ModeloMoto", "TEXT"), 
+            ("AnoMoto", "TEXT"), 
+            ("KM", "TEXT"), 
+            ("KMEntrada", "TEXT"), 
+            ("KMSaida", "TEXT"), 
+            ("DataEntrada", "TEXT"), 
+            ("DataSaida", "TEXT"), 
+            ("Placa", "TEXT")
+        ]
+        for col, tipo in colunas_novas_clientes:
+            try: cursor.execute(f"ALTER TABLE Clientes ADD COLUMN {col} {tipo}")
             except Exception: pass
 
         cursor.execute("CREATE TABLE IF NOT EXISTS Vendas(ID INTEGER PRIMARY KEY AUTOINCREMENT, ClienteID INTEGER, Servico TEXT, ValorTotal REAL, ValorPago REAL, DataCompra TEXT)")
@@ -111,12 +137,6 @@ def init_db():
             except Exception: pass
 
         cursor.execute("CREATE TABLE IF NOT EXISTS Produtos(ID TEXT PRIMARY KEY, NomeProduto TEXT, Descricao TEXT, Preco REAL, QtdEstoque REAL DEFAULT 0.0, UnidadeMedida TEXT DEFAULT 'un', CustoCompra REAL DEFAULT 0.0)")
-        
-        colunas_novas_produtos = ["QtdEstoque", "UnidadeMedida", "CustoCompra"]
-        for col in colunas_novas_produtos:
-            try: cursor.execute(f"ALTER TABLE Produtos ADD COLUMN {col} TEXT")
-            except Exception: pass
-
         cursor.execute("CREATE TABLE IF NOT EXISTS Despesas(ID INTEGER PRIMARY KEY AUTOINCREMENT, Descricao TEXT, Categoria TEXT, Valor REAL, DataDespesa TEXT, Observacao TEXT)")
 
         usuarios_padrao = [('admin', '123'), ('maironxd', '14125'), ('luana', '14125'), ('josue', '123')]
@@ -269,12 +289,11 @@ CLIENTES_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
             <thead>
                 <tr class="bg-slate-950 text-cyan-400 text-xs uppercase tracking-wider border-b border-slate-800">
                     <th class="p-4">ID</th>
-                    <th class="p-4">Nome</th>
-                    <th class="p-4">Endereço</th>
+                    <th class="p-4">Tipo</th>
+                    <th class="p-4">Nome / Empresa</th>
+                    <th class="p-4">CPF / CNPJ</th>
                     <th class="p-4">Telefone</th>
-                    <th class="p-4">Veículo</th>
-                    <th class="p-4">Placa</th>
-                    <th class="p-4">KM</th>
+                    <th class="p-4">Veículo / Placa</th>
                     <th class="p-4 text-center">Ações</th>
                 </tr>
             </thead>
@@ -282,12 +301,11 @@ CLIENTES_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                 {% for c in clientes %}
                 <tr class="hover:bg-slate-800/50 transition">
                     <td class="p-4 font-mono text-cyan-300">{{ c[0] }}</td>
-                    <td class="p-4 font-semibold text-white">{{ c[1] }}</td>
-                    <td class="p-4 text-slate-400">{{ c[2] or '-' }}</td>
-                    <td class="p-4 text-slate-300">{{ c[3] or '-' }}</td>
+                    <td class="p-4 font-bold text-xs"><span class="px-2 py-1 rounded {% if c[1] == 'CNPJ' %}bg-amber-500/20 text-amber-400{% else %}bg-blue-500/20 text-blue-400{% endif %}">{{ c[1] }}</span></td>
+                    <td class="p-4 font-semibold text-white">{{ c[2] }}</td>
+                    <td class="p-4 font-mono text-slate-300">{{ c[3] or '-' }}</td>
                     <td class="p-4 text-slate-300">{{ c[4] or '-' }}</td>
-                    <td class="p-4 font-mono text-cyan-400">{{ c[5] or '-' }}</td>
-                    <td class="p-4 text-slate-300">{{ c[6] or '-' }}</td>
+                    <td class="p-4 text-slate-300">{{ c[5] or '-' }} <span class="font-mono text-cyan-400">({{ c[6] or '-' }})</span></td>
                     <td class="p-4 text-center space-x-2">
                         <a href="{{ url_for('lancamento_servico', cliente_id=c[0]) }}" class="bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 px-3 py-1 rounded-lg text-xs font-bold" title="Lançar Serviço"><i class="fa-solid fa-cash-register"></i> Serviço</a>
                         <a href="{{ url_for('historico_cliente', cliente_id=c[0]) }}" class="bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 px-3 py-1 rounded-lg text-xs font-bold" title="Histórico"><i class="fa-solid fa-clock-rotate-left"></i> Histórico</a>
@@ -354,51 +372,128 @@ FORM_PRODUTO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 """)
 
 FORM_CLIENTE_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
-<div class="max-w-xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
+<div class="max-w-2xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
     <h1 class="text-xl font-bold text-white mb-6"><i class="fa-solid fa-user text-cyan-400 mr-2"></i> {{ titulo }}</h1>
     <form method="POST" class="space-y-4">
+        
+        <!-- Tipo de Pessoa -->
         <div>
-            <label class="block text-sm font-medium text-slate-300 mb-1">Nome do Cliente</label>
-            <input type="text" name="nome" value="{{ c[1] if c else '' }}" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            <label class="block text-sm font-medium text-slate-300 mb-1">Tipo de Cliente</label>
+            <select name="tipo_pessoa" id="tipo_pessoa" onchange="alternarCamposPessoa()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                <option value="CPF" {% if c and c[1]=='CPF' %}selected{% endif %}>Pessoa Física (CPF)</option>
+                <option value="CNPJ" {% if c and c[1]=='CNPJ' %}selected{% endif %}>Pessoa Jurídica / Empresa (CNPJ)</option>
+            </select>
         </div>
-        <div>
-            <label class="block text-sm font-medium text-slate-300 mb-1">Endereço</label>
-            <input type="text" name="endereco" value="{{ c[2] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1" id="label_nome">Nome Completo</label>
+                <input type="text" name="nome" value="{{ c[2] if c else '' }}" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1" id="label_doc">CPF</label>
+                <input type="text" name="documento" value="{{ c[3] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
         </div>
-        <div>
-            <label class="block text-sm font-medium text-slate-300 mb-1">Telefone</label>
-            <input type="text" name="telefone" value="{{ c[3] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+
+        <div id="campo_inscricao" class="hidden">
+            <label class="block text-sm font-medium text-slate-300 mb-1">Inscrição Municipal / Estadual</label>
+            <input type="text" name="insc_municipal" value="{{ c[4] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
         </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-slate-300 mb-1">Endereço (Rua, Nº)</label>
+                <input type="text" name="endereco" value="{{ c[5] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Bairro</label>
+                <input type="text" name="bairro" value="{{ c[6] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Cidade</label>
+                <input type="text" name="cidade" value="{{ c[7] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Estado (UF)</label>
+                <input type="text" name="estado" value="{{ c[8] if c else 'MG' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">CEP</label>
+                <input type="text" name="cep" value="{{ c[9] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Telefone / WhatsApp</label>
+                <input type="text" name="telefone" value="{{ c[10] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">E-mail</label>
+                <input type="email" name="email" value="{{ c[11] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+
+        <hr class="border-slate-800 my-4">
+
         <div class="grid grid-cols-2 gap-4">
             <div>
                 <label class="block text-sm font-medium text-slate-300 mb-1">Modelo do Veículo</label>
-                <input type="text" name="modelo" value="{{ c[4] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                <input type="text" name="modelo" value="{{ c[12] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-300 mb-1">Ano</label>
-                <input type="text" name="ano" value="{{ c[5] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                <input type="text" name="ano" value="{{ c[13] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
             </div>
         </div>
         <div class="grid grid-cols-3 gap-4">
             <div>
                 <label class="block text-sm font-medium text-slate-300 mb-1">Placa</label>
-                <input type="text" name="placa" value="{{ c[7] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                <input type="text" name="placa" value="{{ c[15] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-300 mb-1">KM</label>
-                <input type="text" name="km" value="{{ c[6] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                <input type="text" name="km" value="{{ c[14] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-300 mb-1">Data (DD/MM/AAAA)</label>
-                <input type="text" name="data" value="{{ c[8] if c and c|length > 8 and c[8] else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                <input type="text" name="data" value="{{ c[18] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
             </div>
         </div>
+
         <div class="flex space-x-4 pt-4">
-            <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg shadow">Salvar</button>
+            <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg shadow">Salvar Cliente</button>
             <a href="{{ url_for('clientes') }}" class="flex-1 bg-slate-800 hover:bg-slate-700 text-center py-2.5 rounded-lg text-slate-300 font-bold">Cancelar</a>
         </div>
     </form>
 </div>
+
+<script>
+function alternarCamposPessoa() {
+    const tipo = document.getElementById('tipo_pessoa').value;
+    const labelNome = document.getElementById('label_nome');
+    const labelDoc = document.getElementById('label_doc');
+    const campoInsc = document.getElementById('campo_inscricao');
+
+    if (tipo === 'CNPJ') {
+        labelNome.innerText = 'Razão Social / Nome da Empresa';
+        labelDoc.innerText = 'CNPJ';
+        campoInsc.classList.remove('hidden');
+    } else {
+        labelNome.innerText = 'Nome Completo';
+        labelDoc.innerText = 'CPF';
+        campoInsc.classList.add('hidden');
+    }
+}
+// Executa ao carregar a página caso seja edição
+window.onload = function() {
+    alternarCamposPessoa();
+};
+</script>
 """)
 
 DESPESAS_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
@@ -486,7 +581,7 @@ FORM_DESPESA_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 <div class="max-w-3xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
     <h1 class="text-xl font-bold text-white mb-2"><i class="fa-solid fa-cash-register text-cyan-400 mr-2"></i> Lançar Serviço e Selecionar Produtos</h1>
-    <p class="text-slate-400 text-sm mb-6">Cliente: <span class="text-cyan-400 font-semibold">{{ cliente[1] }}</span></p>
+    <p class="text-slate-400 text-sm mb-6">Cliente: <span class="text-cyan-400 font-semibold">{{ cliente[2] }}</span> ({{ cliente[1] }}: {{ cliente[3] or 'N/I' }})</p>
 
     <form method="POST" class="space-y-6">
         <div>
@@ -567,8 +662,8 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 <div class="space-y-6">
     <div class="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow flex justify-between items-center">
         <div>
-            <h1 class="text-xl font-bold text-white"><i class="fa-solid fa-user text-cyan-400 mr-2"></i> Prontuário: {{ cliente[1] }}</h1>
-            <p class="text-slate-400 text-sm mt-1">Tel: {{ cliente[3] or 'N/I' }} | Veículo: {{ cliente[4] or 'N/A' }} (Placa: {{ cliente[7] or 'N/A' }})</p>
+            <h1 class="text-xl font-bold text-white"><i class="fa-solid fa-user text-cyan-400 mr-2"></i> Prontuário: {{ cliente[2] }}</h1>
+            <p class="text-slate-400 text-sm mt-1">Tipo: {{ cliente[1] }} | Doc: {{ cliente[3] or 'N/I' }} | Tel: {{ cliente[10] or 'N/I' }} | Veículo: {{ cliente[12] or 'N/A' }} (Placa: {{ cliente[15] or 'N/A' }})</p>
         </div>
         <div class="space-x-2">
             <a href="{{ url_for('gerar_pdf_cliente', cliente_id=cliente[0]) }}" class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition inline-flex items-center"><i class="fa-solid fa-file-pdf mr-2"></i> Baixar Extrato/Débito PDF</a>
@@ -741,7 +836,7 @@ def clientes():
     if 'usuario' not in session: return redirect(url_for('login'))
     conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("SELECT ID, Nome, Endereco, Telefone, ModeloMoto, Placa, KM FROM Clientes")
+    cursor.execute("SELECT ID, TipoPessoa, Nome, Documento, Telefone, ModeloMoto, Placa FROM Clientes")
     clientes = cursor.fetchall()
     conexao.close()
     return render_template_string(CLIENTES_HTML, clientes=clientes)
@@ -750,9 +845,17 @@ def clientes():
 def novo_cliente():
     if 'usuario' not in session: return redirect(url_for('login'))
     if request.method == 'POST':
+        tipo_pessoa = request.form['tipo_pessoa']
         nome = request.form['nome']
+        documento = request.form['documento']
+        insc_municipal = request.form['insc_municipal']
         endereco = request.form['endereco']
+        bairro = request.form['bairro']
+        cidade = request.form['cidade']
+        estado = request.form['estado']
+        cep = request.form['cep']
         telefone = request.form['telefone']
+        email = request.form['email']
         modelo = request.form['modelo']
         ano = request.form['ano']
         placa = request.form['placa']
@@ -762,11 +865,15 @@ def novo_cliente():
         conexao = get_db_connection()
         cursor = conexao.cursor()
         if DATABASE_URL:
-            cursor.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, Placa, KM, DataEntrada) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                           (nome, endereco, telefone, modelo, ano, placa, km, data))
+            cursor.execute("""
+                INSERT INTO Clientes (TipoPessoa, Nome, Documento, InscMunicipal, Endereco, Bairro, Cidade, Estado, CEP, Telefone, Email, ModeloMoto, AnoMoto, Placa, KM, DataEntrada) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (tipo_pessoa, nome, documento, insc_municipal, endereco, bairro, cidade, estado, cep, telefone, email, modelo, ano, placa, km, data))
         else:
-            cursor.execute("INSERT INTO Clientes (Nome, Endereco, Telefone, ModeloMoto, AnoMoto, Placa, KM, DataEntrada) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                           (nome, endereco, telefone, modelo, ano, placa, km, data))
+            cursor.execute("""
+                INSERT INTO Clientes (TipoPessoa, Nome, Documento, InscMunicipal, Endereco, Bairro, Cidade, Estado, CEP, Telefone, Email, ModeloMoto, AnoMoto, Placa, KM, DataEntrada) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (tipo_pessoa, nome, documento, insc_municipal, endereco, bairro, cidade, estado, cep, telefone, email, modelo, ano, placa, km, data))
         conexao.commit()
         conexao.close()
         flash('Cliente cadastrado com sucesso!', 'success')
@@ -779,9 +886,17 @@ def editar_cliente(id):
     conexao = get_db_connection()
     cursor = conexao.cursor()
     if request.method == 'POST':
+        tipo_pessoa = request.form['tipo_pessoa']
         nome = request.form['nome']
+        documento = request.form['documento']
+        insc_municipal = request.form['insc_municipal']
         endereco = request.form['endereco']
+        bairro = request.form['bairro']
+        cidade = request.form['cidade']
+        estado = request.form['estado']
+        cep = request.form['cep']
         telefone = request.form['telefone']
+        email = request.form['email']
         modelo = request.form['modelo']
         ano = request.form['ano']
         placa = request.form['placa']
@@ -789,17 +904,21 @@ def editar_cliente(id):
         data = request.form['data']
 
         if DATABASE_URL:
-            cursor.execute("UPDATE Clientes SET Nome=%s, Endereco=%s, Telefone=%s, ModeloMoto=%s, AnoMoto=%s, Placa=%s, KM=%s, DataEntrada=%s WHERE ID=%s",
-                           (nome, endereco, telefone, modelo, ano, placa, km, data, id))
+            cursor.execute("""
+                UPDATE Clientes SET TipoPessoa=%s, Nome=%s, Documento=%s, InscMunicipal=%s, Endereco=%s, Bairro=%s, Cidade=%s, Estado=%s, CEP=%s, Telefone=%s, Email=%s, ModeloMoto=%s, AnoMoto=%s, Placa=%s, KM=%s, DataEntrada=%s 
+                WHERE ID=%s
+            """, (tipo_pessoa, nome, documento, insc_municipal, endereco, bairro, cidade, estado, cep, telefone, email, modelo, ano, placa, km, data, id))
         else:
-            cursor.execute("UPDATE Clientes SET Nome=?, Endereco=?, Telefone=?, ModeloMoto=?, AnoMoto=?, Placa=?, KM=?, DataEntrada=? WHERE ID=?",
-                           (nome, endereco, telefone, modelo, ano, placa, km, data, id))
+            cursor.execute("""
+                UPDATE Clientes SET TipoPessoa=?, Nome=?, Documento=?, InscMunicipal=?, Endereco=?, Bairro=?, Cidade=?, Estado=?, CEP=?, Telefone=?, Email=?, ModeloMoto=?, AnoMoto=?, Placa=?, KM=?, DataEntrada=? 
+                WHERE ID=?
+            """, (tipo_pessoa, nome, documento, insc_municipal, endereco, bairro, cidade, estado, cep, telefone, email, modelo, ano, placa, km, data, id))
         conexao.commit()
         conexao.close()
         flash('Cliente atualizado com sucesso!', 'success')
         return redirect(url_for('clientes'))
 
-    cursor.execute("SELECT ID, Nome, Endereco, Telefone, ModeloMoto, AnoMoto, KM, Placa, DataEntrada FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT ID, Nome, Endereco, Telefone, ModeloMoto, AnoMoto, KM, Placa, DataEntrada FROM Clientes WHERE ID=?", (id,))
+    cursor.execute("SELECT ID, TipoPessoa, Nome, Documento, InscMunicipal, Endereco, Bairro, Cidade, Estado, CEP, Telefone, Email, ModeloMoto, AnoMoto, KM, Placa, KMEntrada, KMSaida, DataEntrada, DataSaida FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT ID, TipoPessoa, Nome, Documento, InscMunicipal, Endereco, Bairro, Cidade, Estado, CEP, Telefone, Email, ModeloMoto, AnoMoto, KM, Placa, KMEntrada, KMSaida, DataEntrada, DataSaida FROM Clientes WHERE ID=?", (id,))
     c = cursor.fetchone()
     conexao.close()
     return render_template_string(FORM_CLIENTE_HTML, titulo="Editar Cliente", c=c)
@@ -953,8 +1072,8 @@ def gerar_pdf_cliente(cliente_id):
 
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=letter)
-    p.drawString(100, 750, f"Extrato de Conta - {cliente[1]}")
-    p.drawString(100, 730, f"Telefone: {cliente[3] or '-'} | Veículo: {cliente[4] or '-'}")
+    p.drawString(100, 750, f"Extrato de Conta - {cliente[2]}")
+    p.drawString(100, 730, f"Doc: {cliente[3] or '-'} | Telefone: {cliente[10] or '-'} | Veículo: {cliente[12] or '-'}")
     
     y = 690
     for v in vendas:
@@ -966,13 +1085,12 @@ def gerar_pdf_cliente(cliente_id):
 
     p.save()
     buffer.seek(0)
-    return send_file(buffer, as_attachment=True, download_name=f"extrato_{cliente[1]}.pdf", mimetype='application/pdf')
+    return send_file(buffer, as_attachment=True, download_name=f"extrato_{cliente[2]}.pdf", mimetype='application/pdf')
 
 @app.route('/gerar-nf/<int:venda_id>')
 def gerar_nf(venda_id):
     if 'usuario' not in session: return redirect(url_for('login'))
     
-    # Busca dados reais da venda e do cliente no banco
     conexao = get_db_connection()
     cursor = conexao.cursor()
     cursor.execute("SELECT ID, ClienteID, Servico, ValorTotal, ValorPago, DataCompra FROM Vendas WHERE ID=%s" if DATABASE_URL else "SELECT ID, ClienteID, Servico, ValorTotal, ValorPago, DataCompra FROM Vendas WHERE ID=?", (venda_id,))
@@ -983,7 +1101,7 @@ def gerar_nf(venda_id):
         flash('Venda/OS não encontrada!', 'error')
         return redirect(url_for('clientes'))
         
-    cursor.execute("SELECT ID, Nome, Endereco, Telefone, ModeloMoto, Placa FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT ID, Nome, Endereco, Telefone, ModeloMoto, Placa FROM Clientes WHERE ID=?", (venda[1],))
+    cursor.execute("SELECT ID, TipoPessoa, Nome, Documento, InscMunicipal, Endereco, Bairro, Cidade, Estado, CEP, Telefone, Email FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT ID, TipoPessoa, Nome, Documento, InscMunicipal, Endereco, Bairro, Cidade, Estado, CEP, Telefone, Email FROM Clientes WHERE ID=?", (venda[1],))
     cliente = cursor.fetchone()
     conexao.close()
 
@@ -996,13 +1114,16 @@ def gerar_nf(venda_id):
         "cep": "35568-000"
     }
     
+    # Mapeia dinamicamente com os dados reais do cliente cadastrado (CPF ou CNPJ)
     tomador = {
-        "nome": cliente[1] if cliente else "CLIENTE NÃO INFORMADO",
-        "cnpj": "N/D",
-        "fone": cliente[3] if cliente and cliente[3] else "(37) 0000-0000",
-        "email": "contato@autolub.com",
-        "endereco": cliente[2] if cliente and cliente[2] else "Córrego Fundo - MG",
-        "cep": "35568-000"
+        "tipo": cliente[1] if cliente else "CPF",
+        "nome": cliente[2] if cliente else "CLIENTE NÃO INFORMADO",
+        "cnpj": cliente[3] if cliente and cliente[3] else "N/D",
+        "insc": cliente[4] if cliente and cliente[4] else "N/D",
+        "endereco": f"{cliente[5] or ''}, {cliente[6] or ''} - {cliente[7] or ''}/{cliente[8] or 'MG'}",
+        "cep": cliente[9] if cliente and cliente[9] else "35568-000",
+        "fone": cliente[10] if cliente and cliente[10] else "(37) 0000-0000",
+        "email": cliente[11] if cliente and cliente[11] else "contato@autolub.com"
     }
 
     buffer = io.BytesIO()
@@ -1055,8 +1176,8 @@ def gerar_nf(venda_id):
     elements.append(Spacer(1, 10))
 
     tom_data = [
-        [Paragraph("<b>TOMADOR DO SERVIÇO (Cliente)</b>", normal_style)],
-        [Paragraph(f"<b>Nome/Empresa:</b> {tomador['nome']}<br/><b>CNPJ/CPF:</b> {tomador['cnpj']} &nbsp;&nbsp; <b>Telefone:</b> {tomador['fone']}<br/><b>Endereço:</b> {tomador['endereco']} &nbsp;&nbsp; <b>CEP:</b> {tomador['cep']}<br/><b>E-mail:</b> {tomador['email']}", normal_style)]
+        [Paragraph(f"<b>TOMADOR DO SERVIÇO ({tomador['tipo']})</b>", normal_style)],
+        [Paragraph(f"<b>Nome/Razão Social:</b> {tomador['nome']}<br/><b>{tomador['tipo']}:</b> {tomador['cnpj']} &nbsp;&nbsp; <b>Inscrição Municipal:</b> {tomador['insc']}<br/><b>Telefone:</b> {tomador['fone']} &nbsp;&nbsp; <b>E-mail:</b> {tomador['email']}<br/><b>Endereço:</b> {tomador['endereco']} &nbsp;&nbsp; <b>CEP:</b> {tomador['cep']}", normal_style)]
     ]
     t_tom = Table(tom_data, colWidths=[530])
     t_tom.setStyle(TableStyle([
