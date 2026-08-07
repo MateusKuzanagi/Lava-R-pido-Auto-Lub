@@ -5,6 +5,7 @@ from datetime import datetime
 import os
 from io import BytesIO
 import io
+import pandas as pd
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -212,7 +213,11 @@ INDEX_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 <div class="space-y-6">
     <div class="flex justify-between items-center">
         <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-boxes-stacked text-cyan-400 mr-2"></i> Gestão de Produtos e Insumos</h1>
-        <a href="{{ url_for('novo_produto') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-plus mr-2"></i> Novo Produto/Insumo</a>
+        <div class="flex space-x-2">
+            <a href="{{ url_for('exportar_estoque_excel') }}" class="bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-2 rounded-xl text-sm font-semibold shadow transition flex items-center"><i class="fa-solid fa-file-excel mr-1"></i> Excel</a>
+            <a href="{{ url_for('exportar_estoque_pdf') }}" class="bg-red-700 hover:bg-red-800 text-white px-3 py-2 rounded-xl text-sm font-semibold shadow transition flex items-center"><i class="fa-solid fa-file-pdf mr-1"></i> PDF</a>
+            <a href="{{ url_for('novo_produto') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-plus mr-2"></i> Novo Produto/Insumo</a>
+        </div>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -272,7 +277,11 @@ CLIENTES_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 <div class="space-y-6">
     <div class="flex justify-between items-center">
         <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-users text-cyan-400 mr-2"></i> Gestão de Clientes e Veículos</h1>
-        <a href="{{ url_for('novo_cliente') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-plus mr-2"></i> Novo Cliente</a>
+        <div class="flex space-x-2">
+            <a href="{{ url_for('exportar_clientes_excel') }}" class="bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-2 rounded-xl text-sm font-semibold shadow transition flex items-center"><i class="fa-solid fa-file-excel mr-1"></i> Excel</a>
+            <a href="{{ url_for('exportar_clientes_pdf') }}" class="bg-red-700 hover:bg-red-800 text-white px-3 py-2 rounded-xl text-sm font-semibold shadow transition flex items-center"><i class="fa-solid fa-file-pdf mr-1"></i> PDF</a>
+            <a href="{{ url_for('novo_cliente') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-plus mr-2"></i> Novo Cliente</a>
+        </div>
     </div>
 
     <div class="bg-slate-900 rounded-xl border border-slate-800 shadow overflow-hidden">
@@ -846,6 +855,110 @@ def excluir_cliente(id):
     flash('Cliente e histórico removidos!', 'success')
     return redirect(url_for('clientes'))
 
+# --- ROTAS DE EXPORTAÇÃO (ESTOQUE E CLIENTES) ---
+
+@app.route('/exportar/estoque/excel')
+def exportar_estoque_excel():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos")
+    dados = cursor.fetchall()
+    conexao.close()
+    
+    df = pd.DataFrame(dados, columns=['Código', 'Produto', 'Descrição', 'Preço', 'Estoque', 'Unidade', 'Valor Lote'])
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Estoque')
+    output.seek(0)
+    
+    return send_file(output, as_attachment=True, download_name='estoque_autolub.xlsx', mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+@app.route('/exportar/estoque/pdf')
+def exportar_estoque_pdf():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ID, NomeProduto, Preco, QtdEstoque, UnidadeMedida FROM Produtos")
+    produtos = cursor.fetchall()
+    conexao.close()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    elements.append(Paragraph("<b>Relatório de Estoque - Lava Rápido Auto Lub</b>", styles['Heading1']))
+    elements.append(Spacer(1, 10))
+    
+    t_data = [["Código", "Produto", "Preço", "Estoque", "Unidade"]]
+    for p in produtos:
+        t_data.append([str(p[0]), str(p[1]), f"R$ {p[2]:.2f}" if p[2] else "R$ 0.00", str(p[3]), str(p[4])])
+        
+    t = Table(t_data, colWidths=[80, 200, 80, 80, 90])
+    t.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
+        ('PADDING', (0,0), (-1,-1), 5),
+    ]))
+    elements.append(t)
+    doc.build(elements)
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name='estoque_autolub.pdf', mimetype='application/pdf')
+
+@app.route('/exportar/clientes/excel')
+def exportar_clientes_excel():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ID, Nome, CnpjCpf, InscricaoMunicipal, Telefone, Email, Endereco, Cep, ModeloMoto, Placa FROM Clientes")
+    dados = cursor.fetchall()
+    conexao.close()
+    
+    df = pd.DataFrame(dados, columns=['ID', 'Nome', 'CNPJ/CPF', 'Insc. Municipal', 'Telefone', 'E-mail', 'Endereço', 'CEP', 'Modelo Veículo', 'Placa'])
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Clientes')
+    output.seek(0)
+    
+    return send_file(output, as_attachment=True, download_name='clientes_autolub.xlsx', mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+@app.route('/exportar/clientes/pdf')
+def exportar_clientes_pdf():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ID, Nome, CnpjCpf, Telefone, ModeloMoto, Placa FROM Clientes")
+    clientes = cursor.fetchall()
+    conexao.close()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    elements.append(Paragraph("<b>Relatório de Clientes - Lava Rápido Auto Lub</b>", styles['Heading1']))
+    elements.append(Spacer(1, 10))
+    
+    t_data = [["ID", "Nome / Empresa", "CPF/CNPJ", "Telefone", "Veículo / Placa"]]
+    for c in clientes:
+        t_data.append([str(c[0]), str(c[1]), str(c[2] or '-'), str(c[3] or '-'), f"{c[4] or '-'} / {c[5] or '-'}"])
+        
+    t = Table(t_data, colWidths=[30, 180, 100, 90, 130])
+    t.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
+        ('PADDING', (0,0), (-1,-1), 5),
+    ]))
+    elements.append(t)
+    doc.build(elements)
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name='clientes_autolub.pdf', mimetype='application/pdf')
+
+# --------------------------------------------------------
+
 @app.route('/despesas')
 def despesas():
     if 'usuario' not in session: return redirect(url_for('login'))
@@ -1000,7 +1113,6 @@ def gerar_pdf_cliente(cliente_id):
 def gerar_nf(venda_id):
     if 'usuario' not in session: return redirect(url_for('login'))
     
-    # Busca dados reais da venda e do cliente no banco
     conexao = get_db_connection()
     cursor = conexao.cursor()
     cursor.execute("SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra FROM Vendas WHERE ID=%s" if DATABASE_URL else "SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra FROM Vendas WHERE ID=?", (venda_id,))
