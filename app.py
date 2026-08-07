@@ -4,8 +4,12 @@ import psycopg
 from datetime import datetime
 import os
 from io import BytesIO
+import io
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 
 app = Flask(__name__)
 app.secret_key = 'lava_rapido_secret_key_autolub'
@@ -596,7 +600,8 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                     <td class="p-4 text-emerald-400 font-semibold">R$ {{ "%.2f"|format(v[4]) }}</td>
                     <td class="p-4 font-bold {% if (v[3] - v[4]) > 0 %}text-red-400{% else %}text-slate-400{% endif %}">R$ {{ "%.2f"|format(v[3] - v[4]) }}</td>
                     <td class="p-4 text-slate-300">{{ v[6] or '-' }}</td>
-                    <td class="p-4 text-center">
+                    <td class="p-4 text-center space-x-2">
+                        <a href="{{ url_for('gerar_nf', venda_id=v[0]) }}" class="text-amber-400 hover:text-amber-300" title="Gerar Nota Fiscal (PDF)"><i class="fa-solid fa-file-invoice"></i></a>
                         <a href="{{ url_for('excluir_venda', id=v[0]) }}" onclick="return confirm('Excluir esta OS?')" class="text-red-400 hover:text-red-300"><i class="fa-solid fa-trash"></i></a>
                     </td>
                 </tr>
@@ -962,6 +967,135 @@ def gerar_pdf_cliente(cliente_id):
     p.save()
     buffer.seek(0)
     return send_file(buffer, as_attachment=True, download_name=f"extrato_{cliente[1]}.pdf", mimetype='application/pdf')
+
+@app.route('/gerar-nf/<int:venda_id>')
+def gerar_nf(venda_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    
+    # Busca dados reais da venda e do cliente no banco
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ID, ClienteID, Servico, ValorTotal, ValorPago, DataCompra FROM Vendas WHERE ID=%s" if DATABASE_URL else "SELECT ID, ClienteID, Servico, ValorTotal, ValorPago, DataCompra FROM Vendas WHERE ID=?", (venda_id,))
+    venda = cursor.fetchone()
+    
+    if not venda:
+        conexao.close()
+        flash('Venda/OS não encontrada!', 'error')
+        return redirect(url_for('clientes'))
+        
+    cursor.execute("SELECT ID, Nome, Endereco, Telefone, ModeloMoto, Placa FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT ID, Nome, Endereco, Telefone, ModeloMoto, Placa FROM Clientes WHERE ID=?", (venda[1],))
+    cliente = cursor.fetchone()
+    conexao.close()
+
+    emitente = {
+        "nome": "61.527.886 LUCIANO JOSE FREIRE TEIXEIRA",
+        "cnpj": "61.527.886/0001-10",
+        "fone": "(37) 3322-8007",
+        "email": "LJ9219556LU@GMAIL.COM",
+        "endereco": "RODOVIA MG 050 KM215, S/N, CORREGO FUNDO - MG",
+        "cep": "35568-000"
+    }
+    
+    tomador = {
+        "nome": cliente[1] if cliente else "CLIENTE NÃO INFORMADO",
+        "cnpj": "N/D",
+        "fone": cliente[3] if cliente and cliente[3] else "(37) 0000-0000",
+        "email": "contato@autolub.com",
+        "endereco": cliente[2] if cliente and cliente[2] else "Córrego Fundo - MG",
+        "cep": "35568-000"
+    }
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
+    
+    styles = getSampleStyleSheet()
+    normal_style = styles['Normal']
+    normal_style.fontSize = 8
+    normal_style.leading = 10
+
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=normal_style,
+        fontSize=10,
+        leading=12,
+        fontName='Helvetica-Bold',
+        alignment=1
+    )
+
+    elements.append(Paragraph("<b>PREFEITURA MUNICIPAL DE CÓRREGO FUNDO</b>", title_style))
+    elements.append(Paragraph("DANFSe v1.0 - Documento Auxiliar da NFS-e", title_style))
+    elements.append(Spacer(1, 10))
+
+    data_emissao = venda[5] if venda[5] else datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    cabecalho_data = [
+        [Paragraph(f"<b>Chave de Acesso da NFS-e:</b><br/>31199552261527886000110000000000001726050{venda[0]:04d}", normal_style)],
+        [Paragraph(f"<b>Número da NFS-e:</b> {venda[0]} &nbsp;&nbsp;&nbsp;&nbsp; <b>Competência:</b> {data_emissao} &nbsp;&nbsp;&nbsp;&nbsp; <b>Emissão:</b> {data_emissao}", normal_style)]
+    ]
+    t_cabecalho = Table(cabecalho_data, colWidths=[530])
+    t_cabecalho.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (-1,-1), colors.whitesmoke),
+        ('PADDING', (0,0), (-1,-1), 6),
+    ]))
+    elements.append(t_cabecalho)
+    elements.append(Spacer(1, 10))
+
+    emit_data = [
+        [Paragraph("<b>EMITENTE DA NFS-e (Prestador do Serviço)</b>", normal_style)],
+        [Paragraph(f"<b>Nome/Empresa:</b> {emitente['nome']}<br/><b>CNPJ/CPF:</b> {emitente['cnpj']} &nbsp;&nbsp; <b>Telefone:</b> {emitente['fone']}<br/><b>Endereço:</b> {emitente['endereco']} &nbsp;&nbsp; <b>CEP:</b> {emitente['cep']}<br/><b>E-mail:</b> {emitente['email']}", normal_style)]
+    ]
+    t_emit = Table(emit_data, colWidths=[530])
+    t_emit.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (0,0), colors.lightgrey),
+        ('PADDING', (0,0), (-1,-1), 5),
+    ]))
+    elements.append(t_emit)
+    elements.append(Spacer(1, 10))
+
+    tom_data = [
+        [Paragraph("<b>TOMADOR DO SERVIÇO (Cliente)</b>", normal_style)],
+        [Paragraph(f"<b>Nome/Empresa:</b> {tomador['nome']}<br/><b>CNPJ/CPF:</b> {tomador['cnpj']} &nbsp;&nbsp; <b>Telefone:</b> {tomador['fone']}<br/><b>Endereço:</b> {tomador['endereco']} &nbsp;&nbsp; <b>CEP:</b> {tomador['cep']}<br/><b>E-mail:</b> {tomador['email']}", normal_style)]
+    ]
+    t_tom = Table(tom_data, colWidths=[530])
+    t_tom.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (0,0), colors.lightgrey),
+        ('PADDING', (0,0), (-1,-1), 5),
+    ]))
+    elements.append(t_tom)
+    elements.append(Spacer(1, 10))
+
+    serv_data = [
+        [Paragraph("<b>SERVIÇO PRESTADO</b>", normal_style)],
+        [Paragraph(f"<b>Código de Tributação Nacional:</b> 14.01.01 - Lubrificação, limpeza, lustração, revisão...<br/><b>Descrição do Serviço:</b> {venda[2]}<br/><b>Local da Prestação:</b> Córrego Fundo - MG", normal_style)]
+    ]
+    t_serv = Table(serv_data, colWidths=[530])
+    t_serv.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (0,0), colors.lightgrey),
+        ('PADDING', (0,0), (-1,-1), 5),
+    ]))
+    elements.append(t_serv)
+    elements.append(Spacer(1, 10))
+
+    val_total = venda[3] if venda[3] else 0.0
+    val_data = [
+        [Paragraph("<b>VALOR TOTAL DA NFS-E</b>", normal_style)],
+        [Paragraph(f"<b>Valor do Serviço:</b> R$ {val_total:.2f} &nbsp;&nbsp;&nbsp;&nbsp; <b>Descontos:</b> R$ 0,00 &nbsp;&nbsp;&nbsp;&nbsp; <b>Valor Líquido:</b> <b>R$ {val_total:.2f}</b>", normal_style)]
+    ]
+    t_val = Table(val_data, colWidths=[530])
+    t_val.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (0,0), colors.lightgrey),
+        ('PADDING', (0,0), (-1,-1), 5),
+    ]))
+    elements.append(t_val)
+
+    doc.build(elements)
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"nota_fiscal_{venda_id}.pdf", mimetype='application/pdf')
 
 @app.route('/dashboard')
 def dashboard():
