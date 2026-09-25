@@ -69,7 +69,12 @@ def init_db():
                 DataCompra TEXT,
                 FormaPagamento TEXT,
                 Observacao TEXT,
-                CustoInsumos TEXT
+                CustoInsumos TEXT,
+                ChequeNumero TEXT,
+                ChequeBanco TEXT,
+                ChequeAgencia TEXT,
+                ChequeConta TEXT,
+                ChequeVencimento TEXT
             )
         """)
         cursor.execute("""
@@ -115,7 +120,12 @@ def init_db():
 
         cursor.execute("CREATE TABLE IF NOT EXISTS Vendas(ID INTEGER PRIMARY KEY AUTOINCREMENT, ClienteID INTEGER, Servico TEXT, ValorTotal REAL, ValorPago REAL, DataCompra TEXT)")
         
-        colunas_novas_vendas = [("FormaPagamento", "TEXT"), ("Observacao", "TEXT"), ("CustoInsumos", "TEXT"), ("CodigoTributacao", "TEXT"), ("LocalPrestacao", "TEXT")]
+        colunas_novas_vendas = [
+            ("FormaPagamento", "TEXT"), ("Observacao", "TEXT"), ("CustoInsumos", "TEXT"), 
+            ("CodigoTributacao", "TEXT"), ("LocalPrestacao", "TEXT"),
+            ("ChequeNumero", "TEXT"), ("ChequeBanco", "TEXT"), ("ChequeAgencia", "TEXT"), 
+            ("ChequeConta", "TEXT"), ("ChequeVencimento", "TEXT")
+        ]
         for col, tipo in colunas_novas_vendas:
             try: cursor.execute(f"ALTER TABLE Vendas ADD COLUMN {col} {tipo}")
             except Exception: pass
@@ -227,7 +237,7 @@ INDEX_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
             <p class="text-2xl font-bold text-emerald-400 mt-1">R$ {{ "%.2f"|format(valor_estoque) }}</p>
         </div>
         <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
-            <p class="text-slate-400 text-xs font-bold uppercase">Receita do Mês</p>
+            <p class="text-slate-400 text-xs font-bold uppercase">Receita Geral</p>
             <p class="text-2xl font-bold text-cyan-400 mt-1">R$ {{ "%.2f"|format(receita_mes) }}</p>
         </div>
         <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
@@ -547,14 +557,16 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
                 <input type="number" step="0.01" name="valor_pago" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
             </div>
         </div>
+
         <div class="grid grid-cols-2 gap-4">
             <div>
                 <label class="block text-sm font-medium text-slate-300 mb-1">Forma de Pagamento</label>
-                <select name="forma_pagto" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                <select name="forma_pagto" id="forma_pagto" onchange="toggleChequeFields()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
                     <option value="Pix">Pix</option>
                     <option value="Dinheiro">Dinheiro</option>
                     <option value="Cartão de Crédito">Cartão de Crédito</option>
                     <option value="Cartão de Débito">Cartão de Débito</option>
+                    <option value="Cheque">Cheque</option>
                     <option value="A prazo">A prazo</option>
                 </select>
             </div>
@@ -563,6 +575,36 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
                 <input type="text" name="obs" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
             </div>
         </div>
+
+        <!-- Campos adicionais caso a forma de pagamento seja Cheque -->
+        <div id="cheque-fields" class="space-y-4 bg-slate-950 p-4 rounded-xl border border-slate-800 hidden">
+            <h3 class="text-sm font-bold text-amber-400 uppercase tracking-wide"><i class="fa-solid fa-money-check mr-1"></i> Informações do Cheque</h3>
+            <div class="grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Número do Cheque</label>
+                    <input type="text" name="cheque_numero" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Banco</label>
+                    <input type="text" name="cheque_banco" placeholder="Ex: Banco do Brasil" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Agência</label>
+                    <input type="text" name="cheque_agencia" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Conta Corrente</label>
+                    <input type="text" name="cheque_conta" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Bom Para (Vencimento)</label>
+                    <input type="text" name="cheque_vencimento" placeholder="DD/MM/AAAA" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                </div>
+            </div>
+        </div>
+
         <div class="pt-4">
             <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow transition">FINALIZAR LANÇAMENTO E GERAR DADOS VÁLIDOS</button>
         </div>
@@ -584,6 +626,15 @@ function removerLinha(btn) {
         btn.closest('.item-row').remove();
     } else {
         alert('Você deve manter pelo menos uma linha de item.');
+    }
+}
+function toggleChequeFields() {
+    const formaPagto = document.getElementById('forma_pagto').value;
+    const chequeFields = document.getElementById('cheque-fields');
+    if (formaPagto === 'Cheque') {
+        chequeFields.classList.remove('hidden');
+    } else {
+        chequeFields.classList.add('hidden');
     }
 }
 </script>
@@ -621,7 +672,12 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                 <tr class="hover:bg-slate-800/50 transition">
                     <td class="p-4 font-mono text-cyan-300">{{ v[0] }}</td>
                     <td class="p-4 text-slate-300">{{ v[7] }}</td>
-                    <td class="p-4 text-white">{{ v[2] }}</td>
+                    <td class="p-4 text-white">
+                        {{ v[2] }}
+                        {% if v[8] == 'Cheque' and v[11] %}
+                            <br/><span class="text-xs text-amber-400 font-mono">Cheque nº {{ v[11] }} | Banco: {{ v[12] }} | Bom para: {{ v[15] }}</span>
+                        {% endif %}
+                    </td>
                     <td class="p-4 text-slate-300">R$ {{ "%.2f"|format(v[5]) }}</td>
                     <td class="p-4 text-emerald-400 font-semibold">R$ {{ "%.2f"|format(v[6]) }}</td>
                     <td class="p-4 font-bold {% if (v[5] - v[6]) > 0 %}text-red-400{% else %}text-slate-400{% endif %}">R$ {{ "%.2f"|format(v[5] - v[6]) }}</td>
@@ -726,7 +782,6 @@ def gerar_pdf_estoque():
     elements.append(Paragraph(f"Data de Emissão: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", title_style))
     elements.append(Spacer(1, 15))
 
-    # Tabela com Código, Nome/Produto, Descrição, Preço e Estoque
     dados_tabela = [
         [
             Paragraph("<b>Código</b>", normal_style), 
@@ -978,6 +1033,13 @@ def lancamento_servico(cliente_id):
         obs = request.form['obs']
         data_compra = datetime.now().strftime("%d/%m/%Y")
 
+        # Dados específicos do cheque
+        cheque_numero = request.form.get('cheque_numero', '')
+        cheque_banco = request.form.get('cheque_banco', '')
+        cheque_agencia = request.form.get('cheque_agencia', '')
+        cheque_conta = request.form.get('cheque_conta', '')
+        cheque_vencimento = request.form.get('cheque_vencimento', '')
+
         produtos_cod = request.form.getlist('produto_codigo[]')
         produtos_qtd = request.form.getlist('produto_qtd[]')
 
@@ -993,11 +1055,16 @@ def lancamento_servico(cliente_id):
                     pass
 
         if DATABASE_URL:
-            cursor.execute("INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                           (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs))
+            cursor.execute("""
+                INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
         else:
-            cursor.execute("INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs))
+            cursor.execute("""
+                INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
+        
         conexao.commit()
         conexao.close()
         flash('Serviço lançado com sucesso e estoque atualizado!', 'success')
@@ -1017,7 +1084,15 @@ def historico_cliente(cliente_id):
     cursor = conexao.cursor()
     cursor.execute("SELECT * FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
     cliente = cursor.fetchone()
-    cursor.execute("SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao FROM Vendas WHERE ClienteID=%s" if DATABASE_URL else "SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao FROM Vendas WHERE ClienteID=?", (cliente_id,))
+    
+    query_vendas = """
+        SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento 
+        FROM Vendas WHERE ClienteID=%s
+    """ if DATABASE_URL else """
+        SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento 
+        FROM Vendas WHERE ClienteID=?
+    """
+    cursor.execute(query_vendas, (cliente_id,))
     vendas = cursor.fetchall()
     conexao.close()
     return render_template_string(HISTORICO_HTML, cliente=cliente, vendas=vendas)
@@ -1197,35 +1272,87 @@ def gerar_nf(venda_id):
     buffer.seek(0)
     return send_file(buffer, as_attachment=True, download_name=f"nota_fiscal_{venda_id}.pdf", mimetype='application/pdf')
 
-@app.route('/dashboard')
+@app.route('/dashboard', methods=['GET', 'POST'])
 def dashboard():
     if 'usuario' not in session: return redirect(url_for('login'))
+    
+    mes_selecionado = request.args.get('mes', datetime.now().strftime("%Y-%m"))
+    
     conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("SELECT SUM(ValorPago) FROM Vendas")
-    res_vendas = cursor.fetchone()
-    total_receitas = res_vendas[0] if res_vendas and res_vendas[0] else 0.0
     
-    cursor.execute("SELECT SUM(Valor) FROM Despesas")
-    res_despesas = cursor.fetchone()
-    total_despesas = res_despesas[0] if res_despesas and res_despesas[0] else 0.0
+    cursor.execute("SELECT ValorPago, DataCompra FROM Vendas")
+    vendas = cursor.fetchall()
+    
+    cursor.execute("SELECT Valor, DataDespesa FROM Despesas")
+    despesas = cursor.fetchall()
     conexao.close()
     
+    total_receitas_mes = 0.0
+    total_despesas_mes = 0.0
+    
+    for v in vendas:
+        val, data_str = v[0], v[1]
+        if val and data_str:
+            try:
+                dt = datetime.strptime(data_str.strip(), "%d/%m/%Y")
+                if dt.strftime("%Y-%m") == mes_selecionado:
+                    total_receitas_mes += float(val)
+            except Exception:
+                pass
+
+    for d in despesas:
+        val, data_str = d[0], d[1]
+        if val and data_str:
+            try:
+                dt = datetime.strptime(data_str.strip(), "%d/%m/%Y")
+                if dt.strftime("%Y-%m") == mes_selecionado:
+                    total_despesas_mes += float(val)
+            except Exception:
+                pass
+
+    saldo_liquido_mes = total_receitas_mes - total_despesas_mes
+
+    anos_meses = [
+        ("2026-01", "Janeiro/2026"), ("2026-02", "Fevereiro/2026"), ("2026-03", "Março/2026"),
+        ("2026-04", "Abril/2026"), ("2026-05", "Maio/2026"), ("2026-06", "Junho/2026"),
+        ("2026-07", "Julho/2026"), ("2026-08", "Agosto/2026"), ("2026-09", "Setembro/2026"),
+        ("2026-10", "Outubro/2026"), ("2026-11", "Novembro/2026"), ("2026-12", "Dezembro/2026"),
+        ("2025-01", "Janeiro/2025"), ("2025-02", "Fevereiro/2025"), ("2025-03", "Março/2025"),
+        ("2025-04", "Abril/2025"), ("2025-05", "Maio/2025"), ("2025-06", "Junho/2025"),
+        ("2025-07", "Julho/2025"), ("2025-08", "Agosto/2025"), ("2025-09", "Setembro/2025"),
+        ("2025-10", "Outubro/2025"), ("2025-11", "Novembro/2025"), ("2025-12", "Dezembro/2025")
+    ]
+    
+    options_html = ""
+    for val_m, nome_m in anos_meses:
+        sel = "selected" if val_m == mes_selecionado else ""
+        options_html += f'<option value="{val_m}" {sel}>{nome_m}</option>'
+
     dashboard_html = BASE_LAYOUT.replace("{% block content %}{% endblock %}", f"""
     <div class="space-y-6">
-        <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-chart-line text-cyan-400 mr-2"></i> Dashboard Financeiro</h1>
+        <div class="flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-chart-line text-cyan-400 mr-2"></i> Dashboard Financeiro</h1>
+            <form method="GET" class="flex items-center space-x-2">
+                <label class="text-sm font-medium text-slate-300">Selecionar Mês:</label>
+                <select name="mes" onchange="this.form.submit()" class="bg-slate-900 border border-slate-700 text-white rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-cyan-400">
+                    {options_html}
+                </select>
+            </form>
+        </div>
+
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div class="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow">
-                <p class="text-slate-400 text-xs font-bold uppercase">Total Receitas</p>
-                <p class="text-3xl font-bold text-emerald-400 mt-2">R$ {total_receitas:.2f}</p>
+                <p class="text-slate-400 text-xs font-bold uppercase">Receitas do Mês</p>
+                <p class="text-3xl font-bold text-emerald-400 mt-2">R$ {total_receitas_mes:.2f}</p>
             </div>
             <div class="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow">
-                <p class="text-slate-400 text-xs font-bold uppercase">Total Despesas</p>
-                <p class="text-3xl font-bold text-red-400 mt-2">R$ {total_despesas:.2f}</p>
+                <p class="text-slate-400 text-xs font-bold uppercase">Despesas do Mês</p>
+                <p class="text-3xl font-bold text-red-400 mt-2">R$ {total_despesas_mes:.2f}</p>
             </div>
             <div class="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow">
-                <p class="text-slate-400 text-xs font-bold uppercase">Saldo Líquido</p>
-                <p class="text-3xl font-bold text-cyan-400 mt-2">R$ {(total_receitas - total_despesas):.2f}</p>
+                <p class="text-slate-400 text-xs font-bold uppercase">Lucro Líquido do Mês</p>
+                <p class="text-3xl font-bold text-cyan-400 mt-2">R$ {saldo_liquido_mes:.2f}</p>
             </div>
         </div>
     </div>
