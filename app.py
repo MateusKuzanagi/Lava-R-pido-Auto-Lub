@@ -5,6 +5,11 @@ from datetime import datetime
 import os
 from io import BytesIO
 import io
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -29,7 +34,6 @@ def init_db():
     cursor = conexao.cursor()
 
     if DATABASE_URL:
-        # Tabelas para PostgreSQL (Render)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS Usuarios(
                 ID SERIAL PRIMARY KEY, 
@@ -105,7 +109,6 @@ def init_db():
             if not cursor.fetchone():
                 cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (%s, %s)", (user, senha))
     else:
-        # Tabelas para SQLite (Local)
         cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
         
@@ -149,6 +152,39 @@ def init_db():
     conexao.close()
 
 init_db()
+
+# Função auxiliar para envio automático de e-mail com anexo PDF
+def enviar_email_automatico(pdf_bytes, nome_arquivo, nome_cliente):
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587
+    # Substitua pelas suas credenciais reais de envio ou variáveis de ambiente
+    remetente = os.environ.get("MAIL_USERNAME", "seu_email@gmail.com")
+    senha = os.environ.get("MAIL_PASSWORD", "sua_senha_de_app")
+    destinatario = "mateusassis42@gmail.com"
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = remetente
+        msg['To'] = destinatario
+        msg['Subject'] = f"Extrato PDF Automatizado - Cliente: {nome_cliente}"
+
+        corpo = f"Olá Mateus,\n\nSegue em anexo o extrato gerado automaticamente para o cliente {nome_cliente}.\n\nAtenciosamente,\nSistema Lava Rápido Auto Lub."
+        msg.attach(MIMEText(corpo, 'plain'))
+
+        parte = MIMEBase('application', 'octet-stream')
+        parte.set_payload(pdf_bytes.getvalue())
+        encoders.encode_base64(parte)
+        parte.add_header('Content-Disposition', f"attachment; filename= {nome_arquivo}")
+        msg.attach(parte)
+
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(remetente, senha)
+        server.sendmail(remetente, destinatario, msg.as_string())
+        server.quit()
+        print("E-mail enviado com sucesso para mateusassis42@gmail.com!")
+    except Exception as e:
+        print(f"Erro ao enviar e-mail automático: {e}")
 
 BASE_LAYOUT = """
 <!DOCTYPE html>
@@ -1033,7 +1069,6 @@ def lancamento_servico(cliente_id):
         obs = request.form['obs']
         data_compra = datetime.now().strftime("%d/%m/%Y")
 
-        # Dados específicos do cheque
         cheque_numero = request.form.get('cheque_numero', '')
         cheque_banco = request.form.get('cheque_banco', '')
         cheque_agencia = request.form.get('cheque_agencia', '')
@@ -1055,11 +1090,29 @@ def lancamento_servico(cliente_id):
                     pass
 
         if DATABASE_URL:
+            try:
+                cursor.execute("ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS ChequeNumero TEXT")
+                cursor.execute("ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS ChequeBanco TEXT")
+                cursor.execute("ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS ChequeAgencia TEXT")
+                cursor.execute("ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS ChequeConta TEXT")
+                cursor.execute("ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS ChequeVencimento TEXT")
+            except Exception:
+                pass
+
             cursor.execute("""
                 INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
         else:
+            try:
+                cursor.execute("ALTER TABLE Vendas ADD COLUMN ChequeNumero TEXT")
+                cursor.execute("ALTER TABLE Vendas ADD COLUMN ChequeBanco TEXT")
+                cursor.execute("ALTER TABLE Vendas ADD COLUMN ChequeAgencia TEXT")
+                cursor.execute("ALTER TABLE Vendas ADD COLUMN ChequeConta TEXT")
+                cursor.execute("ALTER TABLE Vendas ADD COLUMN ChequeVencimento TEXT")
+            except Exception:
+                pass
+
             cursor.execute("""
                 INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1139,7 +1192,13 @@ def gerar_pdf_cliente(cliente_id):
 
     p.save()
     buffer.seek(0)
-    return send_file(buffer, as_attachment=True, download_name=f"extrato_{cliente[1]}.pdf", mimetype='application/pdf')
+
+    # ENVIO AUTOMÁTICO DO PDF PARA MATEUSASSIS42@GMAIL.COM
+    nome_arquivo = f"extrato_{cliente[1].replace(' ', '_')}.pdf"
+    enviar_email_automatico(buffer, nome_arquivo, cliente[1])
+
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=nome_arquivo, mimetype='application/pdf')
 
 @app.route('/gerar-nf/<int:venda_id>')
 def gerar_nf(venda_id):
