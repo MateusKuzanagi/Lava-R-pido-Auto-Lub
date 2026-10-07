@@ -38,7 +38,6 @@ def init_db():
     cursor = conexao.cursor()
 
     if DATABASE_URL:
-        # Tabelas para PostgreSQL (Supabase / Render)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS Usuarios(
                 ID SERIAL PRIMARY KEY, 
@@ -115,7 +114,6 @@ def init_db():
             if not cursor.fetchone():
                 cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (%s, %s)", (user, senha))
     else:
-        # Tabelas para SQLite (Local)
         cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
         
@@ -746,6 +744,7 @@ def index():
     conexao = get_db_connection()
     cursor = conexao.cursor()
     
+    # Cálculo seguro do valor do estoque físico (Custo unitário de compra * Qtd em stock)
     cursor.execute("SELECT SUM(CustoCompra * QtdEstoque) FROM Produtos")
     res_estoque = cursor.fetchone()
     valor_estoque = res_estoque[0] if res_estoque and res_estoque[0] else 0.0
@@ -756,7 +755,7 @@ def index():
     cursor.execute("SELECT COUNT(*) FROM Produtos WHERE QtdEstoque <= 2")
     estoque_baixo = cursor.fetchone()[0]
 
-    # Filtrar receita estritamente do mês atual para zerar na virada do mês
+    # Filtrar a receita estritamente do mês atual para zerar e recomeçar na virada do mês
     mes_atual_str = datetime.now().strftime("%Y-%m")
     cursor.execute("SELECT ValorPago, DataCompra FROM Vendas")
     todas_vendas = cursor.fetchall()
