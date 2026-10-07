@@ -538,7 +538,7 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
                     <select name="produto_codigo[]" class="flex-2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
                         <option value="">Selecione um produto/insumo...</option>
                         {% for p in produtos %}
-                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - Custo Unit: R$ {{ "%.2f"|format(p[6] or 0.0) }} (Estoque: {{ p[4] }})</option>
+                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - Custo Unit: R$ {{ "%.2f"|format(p[5] or 0.0) }} (Estoque: {{ p[3] }})</option>
                         {% endfor %}
                     </select>
                     <input type="number" step="0.01" name="produto_qtd[]" placeholder="Qtd" value="1" class="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
@@ -882,7 +882,10 @@ def editar_produto(id):
         flash('Produto atualizado com sucesso!', 'success')
         return redirect(url_for('index'))
     
-    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra WHERE ID=%s" if DATABASE_URL else "SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=?", (id,))
+    if DATABASE_URL:
+        cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=%s", (id,))
+    else:
+        cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=?", (id,))
     p = cursor.fetchone()
     conexao.close()
     return render_template_string(FORM_PRODUTO_HTML, titulo="Editar Produto / Insumo", p=p)
@@ -903,7 +906,6 @@ def clientes():
     if 'usuario' not in session: return redirect(url_for('login'))
     conexao = get_db_connection()
     cursor = conexao.cursor()
-    # Ordem alfabética aplicada aqui conforme solicitado
     cursor.execute("SELECT ID, Nome, CnpjCpf, Telefone, ModeloMoto, Placa FROM Clientes ORDER BY Nome ASC")
     clientes = cursor.fetchall()
     conexao.close()
@@ -1063,7 +1065,6 @@ def lancamento_servico(cliente_id):
             if cod:
                 try:
                     qtd_usada = float(qtd_str or 0)
-                    # Busca custo unitário e nome do produto
                     if DATABASE_URL:
                         cursor.execute("SELECT NomeProduto, CustoCompra, UnidadeMedida FROM Produtos WHERE ID = %s", (cod,))
                     else:
@@ -1076,7 +1077,6 @@ def lancamento_servico(cliente_id):
                         custo_total_insumos += subtotal_custo
                         detalhes_insumos_lista.append(f"• {nome_prod}: {qtd_usada} {unidade} (Custo Unit: R$ {custo_unit:.2f} | Total: R$ {subtotal_custo:.2f})")
 
-                    # Atualiza o estoque
                     if DATABASE_URL:
                         cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - %s WHERE ID = %s", (qtd_usada, cod))
                     else:
@@ -1101,8 +1101,7 @@ def lancamento_servico(cliente_id):
         conexao.commit()
         conexao.close()
         
-        # Mensagem de aviso de lucro em destaque na tela
-        flash(f"🚀 <b>Serviço Lançado com Sucesso!</b><br/>💰 Valor Cobrado: R$ {valor_total:.2f} | 📦 Custo de Insumos: R$ {custo_total_insumos:.2f} | ⭐ <b>Lucro Líquido: R$ {lucro_liquido:.2f}</b>", 'lucro')
+        flash(f"🚀 <b>Serviço Lançado com Sucesso!</b><br/>💰 Valor Cobrado: R$ {valor_total:.2f} | 📦 Despesa/Custo de Insumos: R$ {custo_total_insumos:.2f} | ⭐ <b>Lucro Líquido: R$ {lucro_liquido:.2f}</b>", 'lucro')
         return redirect(url_for('historico_cliente', cliente_id=cliente_id))
 
     cursor.execute("SELECT * FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
@@ -1426,41 +1425,39 @@ def dashboard():
         ("2025-07", "Julho/2025"), ("2025-08", "Agosto/2025"), ("2025-09", "Setembro/2025"),
         ("2025-10", "Outubro/2025"), ("2025-11", "Novembro/2025"), ("2025-12", "Dezembro/2025")
     ]
-    
-    options_html = ""
-    for val_m, nome_m in anos_meses:
-        sel = "selected" if val_m == mes_selecionado else ""
-        options_html += f'<option value="{val_m}" {sel}>{nome_m}</option>'
 
-    dashboard_html = BASE_LAYOUT.replace("{% block content %}{% endblock %}", f"""
+    DASHBOARD_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
     <div class="space-y-6">
         <div class="flex justify-between items-center">
             <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-chart-line text-cyan-400 mr-2"></i> Dashboard Financeiro</h1>
             <form method="GET" class="flex items-center space-x-2">
-                <label class="text-sm font-medium text-slate-300">Selecionar Mês:</label>
-                <select name="mes" onchange="this.form.submit()" class="bg-slate-900 border border-slate-700 text-white rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-cyan-400">
-                    {options_html}
+                <label class="text-sm text-slate-300 font-medium">Mês:</label>
+                <select name="mes" onchange="this.form.submit()" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-white text-sm">
+                    {% for am, nome_am in anos_meses %}
+                    <option value="{{ am }}" {% if mes_selecionado == am %}selected{% endif %}>{{ nome_am }}</option>
+                    {% endfor %}
                 </select>
             </form>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div class="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow">
-                <p class="text-slate-400 text-xs font-bold uppercase">Receitas do Mês</p>
-                <p class="text-3xl font-bold text-emerald-400 mt-2">R$ {total_receitas_mes:.2f}</p>
+            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Receitas do Mês</p>
+                <p class="text-3xl font-extrabold text-emerald-400 mt-2">R$ {{ "%.2f"|format(total_receitas_mes) }}</p>
             </div>
-            <div class="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow">
-                <p class="text-slate-400 text-xs font-bold uppercase">Despesas do Mês</p>
-                <p class="text-3xl font-bold text-red-400 mt-2">R$ {total_despesas_mes:.2f}</p>
+            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Despesas do Mês</p>
+                <p class="text-3xl font-extrabold text-red-400 mt-2">R$ {{ "%.2f"|format(total_despesas_mes) }}</p>
             </div>
-            <div class="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow">
-                <p class="text-slate-400 text-xs font-bold uppercase">Lucro Líquido do Mês</p>
-                <p class="text-3xl font-bold text-cyan-400 mt-2">R$ {saldo_liquido_mes:.2f}</p>
+            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Saldo Líquido</p>
+                <p class="text-3xl font-extrabold {% if saldo_liquido_mes >= 0 %}text-cyan-400{% else %}text-red-400{% endif %} mt-2">R$ {{ "%.2f"|format(saldo_liquido_mes) }}</p>
             </div>
         </div>
     </div>
     """)
-    return render_template_string(dashboard_html)
+    return render_template_string(DASHBOARD_HTML, total_receitas_mes=total_receitas_mes, total_despesas_mes=total_despesas_mes, saldo_liquido_mes=saldo_liquido_mes, mes_selecionado=mes_selecionado, anos_meses=anos_meses)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
