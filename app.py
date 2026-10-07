@@ -746,11 +746,11 @@ def index():
     conexao = get_db_connection()
     cursor = conexao.cursor()
     
-    # CORREÇÃO: Busca os produtos e calcula o custo de estoque em Python com segurança 
-    # (ignorando estoques negativos para evitar distorções no patrimônio)
+    # Consulta corrigida garantindo a recuperação correta dos campos de estoque e custo
     cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos")
     produtos = cursor.fetchall()
     
+    # CORREÇÃO APLICADA AQUI: p[4] (QtdEstoque) multiplicado por p[6] (CustoCompra)
     valor_estoque = sum(max(0.0, float(p[4] or 0.0)) * float(p[6] or 0.0) for p in produtos)
     total_cadastrados = len(produtos)
     estoque_baixo = sum(1 for p in produtos if float(p[4] or 0.0) <= 2)
