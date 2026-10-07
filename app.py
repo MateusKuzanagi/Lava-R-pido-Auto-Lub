@@ -38,6 +38,7 @@ def init_db():
     cursor = conexao.cursor()
 
     if DATABASE_URL:
+        # Tabelas para PostgreSQL (Supabase / Render)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS Usuarios(
                 ID SERIAL PRIMARY KEY, 
@@ -114,6 +115,7 @@ def init_db():
             if not cursor.fetchone():
                 cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (%s, %s)", (user, senha))
     else:
+        # Tabelas para SQLite (Local)
         cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
         
@@ -545,7 +547,7 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
                     <select name="produto_codigo[]" class="flex-2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
                         <option value="">Selecione um produto/insumo...</option>
                         {% for p in produtos %}
-                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - Custo Unit: {{ moeda_pt(p[5] or 0.0) }} (Estoque: {{ p[3] }})</option>
+                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - Custo Unit: {{ moeda_pt(p[6] or 0.0) }} (Estoque: {{ p[4] }})</option>
                         {% endfor %}
                     </select>
                     <input type="number" step="0.01" name="produto_qtd[]" placeholder="Qtd" value="1" class="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
@@ -744,10 +746,15 @@ def index():
     conexao = get_db_connection()
     cursor = conexao.cursor()
     
-    # Cálculo seguro do valor do estoque físico (Custo unitário de compra * Qtd em stock)
-    cursor.execute("SELECT SUM(CustoCompra * QtdEstoque) FROM Produtos")
-    res_estoque = cursor.fetchone()
-    valor_estoque = res_estoque[0] if res_estoque and res_estoque[0] else 0.0
+    # Busca segura calculando linha a linha em Python para evitar valores negativos ou distorcidos
+    cursor.execute("SELECT CustoCompra, QtdEstoque FROM Produtos")
+    produtos_estoque = cursor.fetchall()
+    
+    valor_estoque = 0.0
+    for p in produtos_estoque:
+        custo, qtd = p[0], p[1]
+        if custo and qtd and qtd > 0:
+            valor_estoque += float(custo) * float(qtd)
 
     cursor.execute("SELECT COUNT(*) FROM Produtos")
     total_cadastrados = cursor.fetchone()[0]
@@ -755,7 +762,7 @@ def index():
     cursor.execute("SELECT COUNT(*) FROM Produtos WHERE QtdEstoque <= 2")
     estoque_baixo = cursor.fetchone()[0]
 
-    # Filtrar a receita estritamente do mês atual para zerar e recomeçar na virada do mês
+    # Filtrar receita estritamente do mês atual para zerar na virada do mês
     mes_atual_str = datetime.now().strftime("%Y-%m")
     cursor.execute("SELECT ValorPago, DataCompra FROM Vendas")
     todas_vendas = cursor.fetchall()
@@ -1471,7 +1478,7 @@ def dashboard():
             </div>
             <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow">
                 <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Saldo Líquido</p>
-                <p class="text-3xl font-extrabold {% if saldo_liquido_mes >= 0 %}text-cyan-400{% else %}text-red-400{% endif %} mt-2">{{ moeda_pt(saldo_liquido_mes) }}</p>
+                <p class="text-3xl font-extrabold {% if saldo_liquido_mes >= 0 %}text-cyan-400{% else %}text-red-400{% endif %} mt-2">{{ moeda_pt(saldo_liquido_mes)}`</p>
             </div>
         </div>
     </div>
