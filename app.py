@@ -5,11 +5,6 @@ from datetime import datetime
 import os
 from io import BytesIO
 import io
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email.mime.text import MIMEText
-from email import encoders
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -34,6 +29,7 @@ def init_db():
     cursor = conexao.cursor()
 
     if DATABASE_URL:
+        # Tabelas para PostgreSQL (Supabase / Render)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS Usuarios(
                 ID SERIAL PRIMARY KEY, 
@@ -73,7 +69,8 @@ def init_db():
                 DataCompra TEXT,
                 FormaPagamento TEXT,
                 Observacao TEXT,
-                CustoInsumos TEXT,
+                CustoInsumos REAL DEFAULT 0.0,
+                DetalhesInsumos TEXT,
                 ChequeNumero TEXT,
                 ChequeBanco TEXT,
                 ChequeAgencia TEXT,
@@ -109,6 +106,7 @@ def init_db():
             if not cursor.fetchone():
                 cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (%s, %s)", (user, senha))
     else:
+        # Tabelas para SQLite (Local)
         cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
         
@@ -124,7 +122,7 @@ def init_db():
         cursor.execute("CREATE TABLE IF NOT EXISTS Vendas(ID INTEGER PRIMARY KEY AUTOINCREMENT, ClienteID INTEGER, Servico TEXT, ValorTotal REAL, ValorPago REAL, DataCompra TEXT)")
         
         colunas_novas_vendas = [
-            ("FormaPagamento", "TEXT"), ("Observacao", "TEXT"), ("CustoInsumos", "TEXT"), 
+            ("FormaPagamento", "TEXT"), ("Observacao", "TEXT"), ("CustoInsumos", "REAL DEFAULT 0.0"), ("DetalhesInsumos", "TEXT"),
             ("CodigoTributacao", "TEXT"), ("LocalPrestacao", "TEXT"),
             ("ChequeNumero", "TEXT"), ("ChequeBanco", "TEXT"), ("ChequeAgencia", "TEXT"), 
             ("ChequeConta", "TEXT"), ("ChequeVencimento", "TEXT")
@@ -135,7 +133,7 @@ def init_db():
 
         cursor.execute("CREATE TABLE IF NOT EXISTS Produtos(ID TEXT PRIMARY KEY, NomeProduto TEXT, Descricao TEXT, Preco REAL, QtdEstoque REAL DEFAULT 0.0, UnidadeMedida TEXT DEFAULT 'un', CustoCompra REAL DEFAULT 0.0)")
         
-        colunas_novas_produtos = [("QtdEstoque", "TEXT"), ("UnidadeMedida", "TEXT"), ("CustoCompra", "TEXT")]
+        colunas_novas_produtos = [("QtdEstoque", "REAL DEFAULT 0.0"), ("UnidadeMedida", "TEXT"), ("CustoCompra", "REAL DEFAULT 0.0")]
         for col, tipo in colunas_novas_produtos:
             try: cursor.execute(f"ALTER TABLE Produtos ADD COLUMN {col} {tipo}")
             except Exception: pass
@@ -152,39 +150,6 @@ def init_db():
     conexao.close()
 
 init_db()
-
-# Função auxiliar para envio automático de e-mail com anexo PDF
-def enviar_email_automatico(pdf_bytes, nome_arquivo, nome_cliente):
-    smtp_server = "smtp.gmail.com"
-    smtp_port = 587
-    # Substitua pelas suas credenciais reais de envio ou variáveis de ambiente
-    remetente = os.environ.get("MAIL_USERNAME", "seu_email@gmail.com")
-    senha = os.environ.get("MAIL_PASSWORD", "sua_senha_de_app")
-    destinatario = "mateusassis42@gmail.com"
-
-    try:
-        msg = MIMEMultipart()
-        msg['From'] = remetente
-        msg['To'] = destinatario
-        msg['Subject'] = f"Extrato PDF Automatizado - Cliente: {nome_cliente}"
-
-        corpo = f"Olá Mateus,\n\nSegue em anexo o extrato gerado automaticamente para o cliente {nome_cliente}.\n\nAtenciosamente,\nSistema Lava Rápido Auto Lub."
-        msg.attach(MIMEText(corpo, 'plain'))
-
-        parte = MIMEBase('application', 'octet-stream')
-        parte.set_payload(pdf_bytes.getvalue())
-        encoders.encode_base64(parte)
-        parte.add_header('Content-Disposition', f"attachment; filename= {nome_arquivo}")
-        msg.attach(parte)
-
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-        server.login(remetente, senha)
-        server.sendmail(remetente, destinatario, msg.as_string())
-        server.quit()
-        print("E-mail enviado com sucesso para mateusassis42@gmail.com!")
-    except Exception as e:
-        print(f"Erro ao enviar e-mail automático: {e}")
 
 BASE_LAYOUT = """
 <!DOCTYPE html>
@@ -217,8 +182,8 @@ BASE_LAYOUT = """
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div class="mb-4 p-4 rounded-xl text-sm font-semibold shadow-md {% if category == 'error' %}bg-red-900/50 border border-red-700 text-red-200{% else %}bg-emerald-900/50 border border-emerald-700 text-emerald-200{% endif %}">
-                        {{ message }}
+                    <div class="mb-4 p-4 rounded-xl text-sm font-semibold shadow-md {% if category == 'error' %}bg-red-900/50 border border-red-700 text-red-200{% elif category == 'lucro' %}bg-cyan-900/80 border border-cyan-500 text-cyan-100 text-base shadow-xl animate-pulse{% else %}bg-emerald-900/50 border border-emerald-700 text-emerald-200{% endif %}">
+                        {{ message | safe }}
                     </div>
                 {% endfor %}
             {% endif %}
@@ -290,8 +255,8 @@ INDEX_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                     <th class="p-4">Produto / Insumo</th>
                     <th class="p-4">Descrição</th>
                     <th class="p-4">Preço Cobrado</th>
+                    <th class="p-4">Custo Unitário</th>
                     <th class="p-4">Estoque Atual</th>
-                    <th class="p-4">Valor Lote</th>
                     <th class="p-4 text-center">Ações</th>
                 </tr>
             </thead>
@@ -302,8 +267,8 @@ INDEX_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                     <td class="p-4 font-semibold text-white">{{ p[1] }}</td>
                     <td class="p-4 text-slate-400">{{ p[2] or '-' }}</td>
                     <td class="p-4 text-slate-300">R$ {{ "%.2f"|format(p[3] or 0.0) }}</td>
+                    <td class="p-4 text-amber-400">R$ {{ "%.2f"|format(p[6] or 0.0) }}</td>
                     <td class="p-4 font-bold {% if p[4] <= 2 %}text-red-400{% else %}text-emerald-400{% endif %}">{{ p[4] }} {{ p[5] or 'un' }}</td>
-                    <td class="p-4 text-slate-300">R$ {{ "%.2f"|format(p[6] or 0.0) }}</td>
                     <td class="p-4 text-center space-x-2">
                         <a href="{{ url_for('editar_produto', id=p[0]) }}" class="text-blue-400 hover:text-blue-300 font-semibold"><i class="fa-solid fa-pen"></i></a>
                         <a href="{{ url_for('excluir_produto', id=p[0]) }}" onclick="return confirm('Deseja excluir este item?')" class="text-red-400 hover:text-red-300 font-semibold"><i class="fa-solid fa-trash"></i></a>
@@ -319,7 +284,7 @@ INDEX_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 CLIENTES_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 <div class="space-y-6">
     <div class="flex justify-between items-center">
-        <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-users text-cyan-400 mr-2"></i> Gestão de Clientes e Veículos</h1>
+        <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-users text-cyan-400 mr-2"></i> Gestão de Clientes e Veículos (Ordem Alfabética)</h1>
         <a href="{{ url_for('novo_cliente') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-plus mr-2"></i> Novo Cliente</a>
     </div>
 
@@ -375,7 +340,7 @@ FORM_PRODUTO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
         </div>
         <div class="grid grid-cols-2 gap-4">
             <div>
-                <label class="block text-sm font-medium text-slate-300 mb-1">Preço de Cobrança (R$)</label>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Preço de Venda (R$)</label>
                 <input type="number" step="0.01" name="preco" value="{{ p[3] if p else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
             </div>
             <div>
@@ -396,8 +361,8 @@ FORM_PRODUTO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                 </select>
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-300 mb-1">Valor do Lote (R$)</label>
-                <input type="number" step="0.01" name="custo" value="{{ p[6] if p else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                <label class="block text-sm font-medium text-slate-300 mb-1">Custo Unitário de Compra (R$)</label>
+                <input type="number" step="0.01" name="custo" value="{{ p[6] if p else '' }}" placeholder="Quanto custa para você" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
             </div>
         </div>
         <div class="flex space-x-4 pt-4">
@@ -546,7 +511,7 @@ FORM_DESPESA_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 
 LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
 <div class="max-w-3xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
-    <h1 class="text-xl font-bold text-white mb-2"><i class="fa-solid fa-cash-register text-cyan-400 mr-2"></i> Lançar Serviço e Dados da Nota Fiscal</h1>
+    <h1 class="text-xl font-bold text-white mb-2"><i class="fa-solid fa-cash-register text-cyan-400 mr-2"></i> Lançar Serviço e Insumos da Lavação</h1>
     <p class="text-slate-400 text-sm mb-6">Cliente: <span class="text-cyan-400 font-semibold">{{ cliente[1] }}</span> (CNPJ/CPF: {{ cliente[2] or 'Não informado' }})</p>
 
     <form method="POST" class="space-y-6">
@@ -567,13 +532,13 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
         </div>
 
         <div class="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
-            <h3 class="text-sm font-bold text-cyan-400 uppercase tracking-wide"><i class="fa-solid fa-boxes-stacked mr-1"></i> Baixa de Insumos/Produtos no Estoque (Opcional)</h3>
+            <h3 class="text-sm font-bold text-cyan-400 uppercase tracking-wide"><i class="fa-solid fa-boxes-stacked mr-1"></i> Baixa de Insumos/Produtos no Estoque (Custo Calculado Automaticamente)</h3>
             <div id="itens-container" class="space-y-3">
                 <div class="flex gap-2 items-center item-row">
                     <select name="produto_codigo[]" class="flex-2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
                         <option value="">Selecione um produto/insumo...</option>
                         {% for p in produtos %}
-                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - R$ {{ "%.2f"|format(p[3] or 0.0) }} (Estoque: {{ p[4] }})</option>
+                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - Custo Unit: R$ {{ "%.2f"|format(p[6] or 0.0) }} (Estoque: {{ p[4] }})</option>
                         {% endfor %}
                     </select>
                     <input type="number" step="0.01" name="produto_qtd[]" placeholder="Qtd" value="1" class="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
@@ -642,7 +607,7 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
         </div>
 
         <div class="pt-4">
-            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow transition">FINALIZAR LANÇAMENTO E GERAR DADOS VÁLIDOS</button>
+            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow transition">FINALIZAR LANÇAMENTO E CALCULAR LUCRO</button>
         </div>
     </form>
 </div>
@@ -683,8 +648,8 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
             <h1 class="text-xl font-bold text-white"><i class="fa-solid fa-user text-cyan-400 mr-2"></i> Prontuário: {{ cliente[1] }}</h1>
             <p class="text-slate-400 text-sm mt-1">CNPJ/CPF: {{ cliente[2] or 'N/I' }} | Tel: {{ cliente[4] or 'N/I' }} | Veículo: {{ cliente[8] or 'N/A' }} (Placa: {{ cliente[9] or 'N/A' }})</p>
         </div>
-        <div class="space-x-2">
-            <a href="{{ url_for('gerar_pdf_cliente', cliente_id=cliente[0]) }}" class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition inline-flex items-center"><i class="fa-solid fa-file-pdf mr-2"></i> Baixar Extrato/Débito PDF</a>
+        <div class="space-x-2 flex">
+            <a href="{{ url_for('gerar_pdf_cliente', cliente_id=cliente[0]) }}" class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition inline-flex items-center"><i class="fa-solid fa-file-pdf mr-2"></i> Extrato PDF</a>
             <a href="{{ url_for('clientes') }}" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-lg text-sm font-semibold">Voltar</a>
         </div>
     </div>
@@ -695,11 +660,11 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                 <tr class="bg-slate-950 text-cyan-400 text-xs uppercase tracking-wider border-b border-slate-800">
                     <th class="p-4">OS #</th>
                     <th class="p-4">Data</th>
-                    <th class="p-4">Serviço / Descrição</th>
+                    <th class="p-4">Serviço / Insumos Utilizados</th>
                     <th class="p-4">Total</th>
-                    <th class="p-4">Pago</th>
-                    <th class="p-4">Débito / Saldo</th>
-                    <th class="p-4">Pagamento</th>
+                    <th class="p-4">Custo Insumos</th>
+                    <th class="p-4">Lucro Líquido</th>
+                    <th class="p-4">Pago / Saldo</th>
                     <th class="p-4 text-center">Ações</th>
                 </tr>
             </thead>
@@ -709,18 +674,30 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                     <td class="p-4 font-mono text-cyan-300">{{ v[0] }}</td>
                     <td class="p-4 text-slate-300">{{ v[7] }}</td>
                     <td class="p-4 text-white">
-                        {{ v[2] }}
-                        {% if v[8] == 'Cheque' and v[11] %}
-                            <br/><span class="text-xs text-amber-400 font-mono">Cheque nº {{ v[11] }} | Banco: {{ v[12] }} | Bom para: {{ v[15] }}</span>
+                        <span class="font-bold">{{ v[2] }}</span>
+                        {% if v[11] %}
+                            <div class="mt-1 bg-slate-950 p-2 rounded border border-slate-800 text-xs text-slate-300">
+                                <span class="text-cyan-400 font-semibold"><i class="fa-solid fa-box-open mr-1"></i> Produtos gastos:</span><br/>
+                                {{ v[11] | safe }}
+                            </div>
+                        {% endif %}
+                        {% if v[8] == 'Cheque' and v[12] %}
+                            <br/><span class="text-xs text-amber-400 font-mono">Cheque nº {{ v[12] }} | Banco: {{ v[13] }} | Bom para: {{ v[16] }}</span>
                         {% endif %}
                     </td>
                     <td class="p-4 text-slate-300">R$ {{ "%.2f"|format(v[5]) }}</td>
-                    <td class="p-4 text-emerald-400 font-semibold">R$ {{ "%.2f"|format(v[6]) }}</td>
-                    <td class="p-4 font-bold {% if (v[5] - v[6]) > 0 %}text-red-400{% else %}text-slate-400{% endif %}">R$ {{ "%.2f"|format(v[5] - v[6]) }}</td>
-                    <td class="p-4 text-slate-300">{{ v[8] or '-' }}</td>
-                    <td class="p-4 text-center space-x-2">
-                        <a href="{{ url_for('gerar_nf', venda_id=v[0]) }}" class="text-amber-400 hover:text-amber-300 font-bold" title="Gerar Nota Fiscal (PDF)"><i class="fa-solid fa-file-invoice"></i> Nota Fiscal</a>
-                        <a href="{{ url_for('excluir_venda', id=v[0]) }}" onclick="return confirm('Excluir esta OS?')" class="text-red-400 hover:text-red-300"><i class="fa-solid fa-trash"></i></a>
+                    <td class="p-4 text-red-400 font-semibold">R$ {{ "%.2f"|format(v[10] or 0.0) }}</td>
+                    <td class="p-4 text-cyan-400 font-bold">R$ {{ "%.2f"|format(v[5] - (v[10] or 0.0)) }}</td>
+                    <td class="p-4">
+                        <span class="text-emerald-400 font-semibold">R$ {{ "%.2f"|format(v[6]) }}</span>
+                        {% if (v[5] - v[6]) > 0 %}
+                            <br/><span class="text-xs text-red-400 font-bold">Devendo: R$ {{ "%.2f"|format(v[5] - v[6]) }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="p-4 text-center space-y-1">
+                        <a href="{{ url_for('gerar_pdf_custos_venda', venda_id=v[0]) }}" class="block bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30 px-2 py-1 rounded text-xs font-bold" title="PDF com os Custos"><i class="fa-solid fa-file-pdf"></i> PDF Custos</a>
+                        <a href="{{ url_for('gerar_nf', venda_id=v[0]) }}" class="block text-amber-400 hover:text-amber-300 text-xs font-bold" title="Gerar Nota Fiscal (PDF)"><i class="fa-solid fa-file-invoice"></i> Nota Fiscal</a>
+                        <a href="{{ url_for('excluir_venda', id=v[0]) }}" onclick="return confirm('Excluir esta OS?')" class="block text-red-400 hover:text-red-300 text-xs"><i class="fa-solid fa-trash"></i> Excluir</a>
                     </td>
                 </tr>
                 {% endfor %}
@@ -760,7 +737,7 @@ def index():
     conexao = get_db_connection()
     cursor = conexao.cursor()
     
-    cursor.execute("SELECT SUM(CustoCompra) FROM Produtos")
+    cursor.execute("SELECT SUM(CustoCompra * QtdEstoque) FROM Produtos")
     res_estoque = cursor.fetchone()
     valor_estoque = res_estoque[0] if res_estoque and res_estoque[0] else 0.0
 
@@ -905,7 +882,7 @@ def editar_produto(id):
         flash('Produto atualizado com sucesso!', 'success')
         return redirect(url_for('index'))
     
-    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=%s" if DATABASE_URL else "SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=?", (id,))
+    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra WHERE ID=%s" if DATABASE_URL else "SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=?", (id,))
     p = cursor.fetchone()
     conexao.close()
     return render_template_string(FORM_PRODUTO_HTML, titulo="Editar Produto / Insumo", p=p)
@@ -926,7 +903,8 @@ def clientes():
     if 'usuario' not in session: return redirect(url_for('login'))
     conexao = get_db_connection()
     cursor = conexao.cursor()
-    cursor.execute("SELECT ID, Nome, CnpjCpf, Telefone, ModeloMoto, Placa FROM Clientes")
+    # Ordem alfabética aplicada aqui conforme solicitado
+    cursor.execute("SELECT ID, Nome, CnpjCpf, Telefone, ModeloMoto, Placa FROM Clientes ORDER BY Nome ASC")
     clientes = cursor.fetchall()
     conexao.close()
     return render_template_string(CLIENTES_HTML, clientes=clientes)
@@ -1078,10 +1056,27 @@ def lancamento_servico(cliente_id):
         produtos_cod = request.form.getlist('produto_codigo[]')
         produtos_qtd = request.form.getlist('produto_qtd[]')
 
+        custo_total_insumos = 0.0
+        detalhes_insumos_lista = []
+
         for cod, qtd_str in zip(produtos_cod, produtos_qtd):
             if cod:
                 try:
                     qtd_usada = float(qtd_str or 0)
+                    # Busca custo unitário e nome do produto
+                    if DATABASE_URL:
+                        cursor.execute("SELECT NomeProduto, CustoCompra, UnidadeMedida FROM Produtos WHERE ID = %s", (cod,))
+                    else:
+                        cursor.execute("SELECT NomeProduto, CustoCompra, UnidadeMedida FROM Produtos WHERE ID = ?", (cod,))
+                    
+                    prod_info = cursor.fetchone()
+                    if prod_info:
+                        nome_prod, custo_unit, unidade = prod_info[0], float(prod_info[1] or 0.0), prod_info[2] or 'un'
+                        subtotal_custo = qtd_usada * custo_unit
+                        custo_total_insumos += subtotal_custo
+                        detalhes_insumos_lista.append(f"• {nome_prod}: {qtd_usada} {unidade} (Custo Unit: R$ {custo_unit:.2f} | Total: R$ {subtotal_custo:.2f})")
+
+                    # Atualiza o estoque
                     if DATABASE_URL:
                         cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - %s WHERE ID = %s", (qtd_usada, cod))
                     else:
@@ -1089,43 +1084,30 @@ def lancamento_servico(cliente_id):
                 except ValueError:
                     pass
 
+        detalhes_insumos_str = "<br/>".join(detalhes_insumos_lista) if detalhes_insumos_lista else "Nenhum insumo lançado."
+        lucro_liquido = valor_total - custo_total_insumos
+
         if DATABASE_URL:
-            try:
-                cursor.execute("ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS ChequeNumero TEXT")
-                cursor.execute("ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS ChequeBanco TEXT")
-                cursor.execute("ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS ChequeAgencia TEXT")
-                cursor.execute("ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS ChequeConta TEXT")
-                cursor.execute("ALTER TABLE Vendas ADD COLUMN IF NOT EXISTS ChequeVencimento TEXT")
-            except Exception:
-                pass
-
             cursor.execute("""
-                INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
+                INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, custo_total_insumos, detalhes_insumos_str, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
         else:
-            try:
-                cursor.execute("ALTER TABLE Vendas ADD COLUMN ChequeNumero TEXT")
-                cursor.execute("ALTER TABLE Vendas ADD COLUMN ChequeBanco TEXT")
-                cursor.execute("ALTER TABLE Vendas ADD COLUMN ChequeAgencia TEXT")
-                cursor.execute("ALTER TABLE Vendas ADD COLUMN ChequeConta TEXT")
-                cursor.execute("ALTER TABLE Vendas ADD COLUMN ChequeVencimento TEXT")
-            except Exception:
-                pass
-
             cursor.execute("""
-                INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
+                INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, custo_total_insumos, detalhes_insumos_str, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
         
         conexao.commit()
         conexao.close()
-        flash('Serviço lançado com sucesso e estoque atualizado!', 'success')
+        
+        # Mensagem de aviso de lucro em destaque na tela
+        flash(f"🚀 <b>Serviço Lançado com Sucesso!</b><br/>💰 Valor Cobrado: R$ {valor_total:.2f} | 📦 Custo de Insumos: R$ {custo_total_insumos:.2f} | ⭐ <b>Lucro Líquido: R$ {lucro_liquido:.2f}</b>", 'lucro')
         return redirect(url_for('historico_cliente', cliente_id=cliente_id))
 
     cursor.execute("SELECT * FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
     cliente = cursor.fetchone()
-    cursor.execute("SELECT ID, NomeProduto, Preco, QtdEstoque, UnidadeMedida FROM Produtos")
+    cursor.execute("SELECT ID, NomeProduto, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos")
     produtos = cursor.fetchall()
     conexao.close()
     return render_template_string(LANCAMENTO_SERVICO_HTML, cliente=cliente, produtos=produtos)
@@ -1139,11 +1121,11 @@ def historico_cliente(cliente_id):
     cliente = cursor.fetchone()
     
     query_vendas = """
-        SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento 
-        FROM Vendas WHERE ClienteID=%s
+        SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento 
+        FROM Vendas WHERE ClienteID=%s ORDER BY ID DESC
     """ if DATABASE_URL else """
-        SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento 
-        FROM Vendas WHERE ClienteID=?
+        SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento 
+        FROM Vendas WHERE ClienteID=? ORDER BY ID DESC
     """
     cursor.execute(query_vendas, (cliente_id,))
     vendas = cursor.fetchall()
@@ -1165,6 +1147,74 @@ def excluir_venda(id):
     if cliente_id:
         return redirect(url_for('historico_cliente', cliente_id=cliente_id))
     return redirect(url_for('clientes'))
+
+@app.route('/venda/pdf-custos/<int:venda_id>')
+def gerar_pdf_custos_venda(venda_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    
+    cursor.execute("SELECT ID, ClienteID, Servico, ValorTotal, CustoInsumos, DetalhesInsumos, DataCompra FROM Vendas WHERE ID=%s" if DATABASE_URL else "SELECT ID, ClienteID, Servico, ValorTotal, CustoInsumos, DetalhesInsumos, DataCompra FROM Vendas WHERE ID=?", (venda_id,))
+    venda = cursor.fetchone()
+    
+    if not venda:
+        conexao.close()
+        flash('Venda não encontrada!', 'error')
+        return redirect(url_for('clientes'))
+
+    cursor.execute("SELECT Nome, CnpjCpf, Telefone FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT Nome, CnpjCpf, Telefone FROM Clientes WHERE ID=?", (venda[1],))
+    cliente = cursor.fetchone()
+    conexao.close()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
+    
+    styles = getSampleStyleSheet()
+    normal_style = styles['Normal']
+    normal_style.fontSize = 10
+    normal_style.leading = 14
+
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=normal_style,
+        fontSize=14,
+        leading=16,
+        fontName='Helvetica-Bold',
+        alignment=1
+    )
+
+    elements.append(Paragraph("<b>Lava Rápido Auto Lub - Relatório de Custos da Lavação</b>", title_style))
+    elements.append(Paragraph(f"Ordem de Serviço (OS): #{venda[0]} | Data: {venda[6]}", title_style))
+    elements.append(Spacer(1, 15))
+
+    cliente_nome = cliente[0] if cliente else "Não informado"
+    cliente_doc = cliente[1] if cliente else "-"
+    
+    elements.append(Paragraph(f"<b>Cliente:</b> {cliente_nome} (CNPJ/CPF: {cliente_doc})", normal_style))
+    elements.append(Paragraph(f"<b>Serviço Prestado:</b> {venda[2]}", normal_style))
+    elements.append(Spacer(1, 10))
+
+    detalhes_texto = venda[5].replace("<br/>", "\n") if venda[5] else "Nenhum insumo detalhado."
+    
+    resumo_data = [
+        [Paragraph("<b>Detalhamento dos Produtos e Insumos Gastos</b>", normal_style)],
+        [Paragraph(f"{detalhes_texto.replace(chr(10), '<br/>')}", normal_style)],
+        [Paragraph(f"<b>Valor Cobrado do Serviço:</b> R$ {venda[3]:.2f}<br/><b>Custo Total de Insumos:</b> R$ {(venda[4] or 0.0):.2f}<br/><b>Lucro Líquido da OS:</b> <b>R$ {venda[3] - (venda[4] or 0.0):.2f}</b>", normal_style)]
+    ]
+    t_resumo = Table(resumo_data, colWidths=[530])
+    t_resumo.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (0,0), colors.lightgrey),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.whitesmoke),
+        ('PADDING', (0,0), (-1,-1), 8),
+    ]))
+    
+    elements.append(t_resumo)
+    doc.build(elements)
+    
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"custos_lavagem_os_{venda_id}.pdf", mimetype='application/pdf')
 
 @app.route('/cliente/pdf/<int:cliente_id>')
 def gerar_pdf_cliente(cliente_id):
@@ -1192,13 +1242,7 @@ def gerar_pdf_cliente(cliente_id):
 
     p.save()
     buffer.seek(0)
-
-    # ENVIO AUTOMÁTICO DO PDF PARA MATEUSASSIS42@GMAIL.COM
-    nome_arquivo = f"extrato_{cliente[1].replace(' ', '_')}.pdf"
-    enviar_email_automatico(buffer, nome_arquivo, cliente[1])
-
-    buffer.seek(0)
-    return send_file(buffer, as_attachment=True, download_name=nome_arquivo, mimetype='application/pdf')
+    return send_file(buffer, as_attachment=True, download_name=f"extrato_{cliente[1]}.pdf", mimetype='application/pdf')
 
 @app.route('/gerar-nf/<int:venda_id>')
 def gerar_nf(venda_id):
