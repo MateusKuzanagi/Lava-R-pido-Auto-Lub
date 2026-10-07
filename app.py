@@ -547,7 +547,7 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
                     <select name="produto_codigo[]" class="flex-2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
                         <option value="">Selecione um produto/insumo...</option>
                         {% for p in produtos %}
-                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - Custo Unit: {{ moeda_pt(p[6] or 0.0) }} (Estoque: {{ p[4] }})</option>
+                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - Custo Unit: {{ moeda_pt(p[5] or 0.0) }} (Estoque: {{ p[3] }})</option>
                         {% endfor %}
                     </select>
                     <input type="number" step="0.01" name="produto_qtd[]" placeholder="Qtd" value="1" class="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
@@ -746,21 +746,14 @@ def index():
     conexao = get_db_connection()
     cursor = conexao.cursor()
     
-    # Busca segura calculando linha a linha em Python para evitar valores negativos ou distorcidos
-    cursor.execute("SELECT CustoCompra, QtdEstoque FROM Produtos")
-    produtos_estoque = cursor.fetchall()
+    # CORREÇÃO: Busca os produtos e calcula o custo de estoque em Python com segurança 
+    # (ignorando estoques negativos para evitar distorções no patrimônio)
+    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos")
+    produtos = cursor.fetchall()
     
-    valor_estoque = 0.0
-    for p in produtos_estoque:
-        custo, qtd = p[0], p[1]
-        if custo and qtd and qtd > 0:
-            valor_estoque += float(custo) * float(qtd)
-
-    cursor.execute("SELECT COUNT(*) FROM Produtos")
-    total_cadastrados = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM Produtos WHERE QtdEstoque <= 2")
-    estoque_baixo = cursor.fetchone()[0]
+    valor_estoque = sum(max(0.0, float(p[4] or 0.0)) * float(p[6] or 0.0) for p in produtos)
+    total_cadastrados = len(produtos)
+    estoque_baixo = sum(1 for p in produtos if float(p[4] or 0.0) <= 2)
 
     # Filtrar receita estritamente do mês atual para zerar na virada do mês
     mes_atual_str = datetime.now().strftime("%Y-%m")
@@ -777,9 +770,6 @@ def index():
                     receita_mes += float(val)
             except Exception:
                 pass
-
-    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos")
-    produtos = cursor.fetchall()
 
     conexao.close()
 
@@ -1478,7 +1468,7 @@ def dashboard():
             </div>
             <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow">
                 <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Saldo Líquido</p>
-                <p class="text-3xl font-extrabold {% if saldo_liquido_mes >= 0 %}text-cyan-400{% else %}text-red-400{% endif %} mt-2">{{ moeda_pt(saldo_liquido_mes)}`</p>
+                <p class="text-3xl font-extrabold {% if saldo_liquido_mes >= 0 %}text-cyan-400{% else %}text-red-400{% endif %} mt-2">{{ moeda_pt(saldo_liquido_mes) }}</p>
             </div>
         </div>
     </div>
