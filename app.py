@@ -746,16 +746,13 @@ def index():
     conexao = get_db_connection()
     cursor = conexao.cursor()
     
-    # Consulta corrigida garantindo a recuperação correta dos campos de estoque e custo
     cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos")
     produtos = cursor.fetchall()
     
-    # CORREÇÃO APLICADA AQUI: p[4] (QtdEstoque) multiplicado por p[6] (CustoCompra)
     valor_estoque = sum(max(0.0, float(p[4] or 0.0)) * float(p[6] or 0.0) for p in produtos)
     total_cadastrados = len(produtos)
     estoque_baixo = sum(1 for p in produtos if float(p[4] or 0.0) <= 2)
 
-    # Filtrar receita estritamente do mês atual para zerar na virada do mês
     mes_atual_str = datetime.now().strftime("%Y-%m")
     cursor.execute("SELECT ValorPago, DataCompra FROM Vendas")
     todas_vendas = cursor.fetchall()
@@ -1400,7 +1397,8 @@ def dashboard():
     conexao = get_db_connection()
     cursor = conexao.cursor()
     
-    cursor.execute("SELECT ValorPago, DataCompra FROM Vendas")
+    # CORREÇÃO DO LUCRO: Busca o ValorPago E o CustoInsumos das vendas do mês
+    cursor.execute("SELECT ValorPago, CustoInsumos, DataCompra FROM Vendas")
     vendas = cursor.fetchall()
     
     cursor.execute("SELECT Valor, DataDespesa FROM Despesas")
@@ -1408,15 +1406,17 @@ def dashboard():
     conexao.close()
     
     total_receitas_mes = 0.0
+    total_custo_insumos_mes = 0.0
     total_despesas_mes = 0.0
     
     for v in vendas:
-        val, data_str = v[0], v[1]
-        if val and data_str:
+        val_pago, custo_ins, data_str = v[0], v[1], v[2]
+        if data_str:
             try:
                 dt = datetime.strptime(data_str.strip(), "%d/%m/%Y")
                 if dt.strftime("%Y-%m") == mes_selecionado:
-                    total_receitas_mes += float(val)
+                    total_receitas_mes += float(val_pago or 0.0)
+                    total_custo_insumos_mes += float(custo_ins or 0.0)
             except Exception:
                 pass
 
@@ -1430,7 +1430,8 @@ def dashboard():
             except Exception:
                 pass
 
-    saldo_liquido_mes = total_receitas_mes - total_despesas_mes
+    # O lucro líquido real subtrai tanto as despesas operacionais quanto o custo dos produtos gastos nos serviços
+    saldo_liquido_mes = total_receitas_mes - total_custo_insumos_mes - total_despesas_mes
 
     anos_meses = [
         ("2026-01", "Janeiro/2026"), ("2026-02", "Fevereiro/2026"), ("2026-03", "Março/2026"),
@@ -1457,23 +1458,27 @@ def dashboard():
             </form>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
                 <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Receitas do Mês</p>
-                <p class="text-3xl font-extrabold text-emerald-400 mt-2">{{ moeda_pt(total_receitas_mes) }}</p>
+                <p class="text-2xl font-bold text-emerald-400 mt-2">{{ moeda_pt(total_receitas_mes) }}</p>
             </div>
-            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow">
-                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Despesas do Mês</p>
-                <p class="text-3xl font-extrabold text-red-400 mt-2">{{ moeda_pt(total_despesas_mes) }}</p>
+            <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Custo de Insumos Gastos</p>
+                <p class="text-2xl font-bold text-amber-400 mt-2">{{ moeda_pt(total_custo_insumos_mes) }}</p>
             </div>
-            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow">
-                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Saldo Líquido</p>
-                <p class="text-3xl font-extrabold {% if saldo_liquido_mes >= 0 %}text-cyan-400{% else %}text-red-400{% endif %} mt-2">{{ moeda_pt(saldo_liquido_mes) }}</p>
+            <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Despesas Operacionais</p>
+                <p class="text-2xl font-bold text-red-400 mt-2">{{ moeda_pt(total_despesas_mes) }}</p>
+            </div>
+            <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Lucro Líquido Real</p>
+                <p class="text-2xl font-extrabold {% if saldo_liquido_mes >= 0 %}text-cyan-400{% else %}text-red-400{% endif %} mt-2">{{ moeda_pt(saldo_liquido_mes) }}</p>
             </div>
         </div>
     </div>
     """)
-    return render_template_string(DASHBOARD_HTML, total_receitas_mes=total_receitas_mes, total_despesas_mes=total_despesas_mes, saldo_liquido_mes=saldo_liquido_mes, mes_selecionado=mes_selecionado, anos_meses=anos_meses)
+    return render_template_string(DASHBOARD_HTML, total_receitas_mes=total_receitas_mes, total_custo_insumos_mes=total_custo_insumos_mes, total_despesas_mes=total_despesas_mes, saldo_liquido_mes=saldo_liquido_mes, mes_selecionado=mes_selecionado, anos_meses=anos_meses)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
