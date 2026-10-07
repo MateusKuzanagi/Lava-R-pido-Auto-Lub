@@ -14,6 +14,15 @@ from reportlab.lib import colors
 app = Flask(__name__)
 app.secret_key = 'lava_rapido_secret_key_autolub'
 
+# Função para formatar valores no padrão brasileiro (ex: 76.616,50)
+def moeda_pt(valor):
+    if valor is None:
+        valor = 0.0
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+# Torna a função acessível diretamente dentro dos templates HTML do Flask
+app.jinja_env.globals.update(moeda_pt=moeda_pt)
+
 # Detecta se está no Render usando PostgreSQL ou rodando local com SQLite
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -235,11 +244,11 @@ INDEX_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
         </div>
         <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
             <p class="text-slate-400 text-xs font-bold uppercase">Valor Estoque (Custo)</p>
-            <p class="text-2xl font-bold text-emerald-400 mt-1">R$ {{ "%.2f"|format(valor_estoque) }}</p>
+            <p class="text-2xl font-bold text-emerald-400 mt-1">{{ moeda_pt(valor_estoque) }}</p>
         </div>
         <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
-            <p class="text-slate-400 text-xs font-bold uppercase">Receita Geral</p>
-            <p class="text-2xl font-bold text-cyan-400 mt-1">R$ {{ "%.2f"|format(receita_mes) }}</p>
+            <p class="text-slate-400 text-xs font-bold uppercase">Receita do Mês</p>
+            <p class="text-2xl font-bold text-cyan-400 mt-1">{{ moeda_pt(receita_mes) }}</p>
         </div>
         <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
             <p class="text-slate-400 text-xs font-bold uppercase">Estoque Baixo</p>
@@ -266,8 +275,8 @@ INDEX_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                     <td class="p-4 font-mono text-cyan-300">{{ p[0] }}</td>
                     <td class="p-4 font-semibold text-white">{{ p[1] }}</td>
                     <td class="p-4 text-slate-400">{{ p[2] or '-' }}</td>
-                    <td class="p-4 text-slate-300">R$ {{ "%.2f"|format(p[3] or 0.0) }}</td>
-                    <td class="p-4 text-amber-400">R$ {{ "%.2f"|format(p[6] or 0.0) }}</td>
+                    <td class="p-4 text-slate-300">{{ moeda_pt(p[3] or 0.0) }}</td>
+                    <td class="p-4 text-amber-400">{{ moeda_pt(p[6] or 0.0) }}</td>
                     <td class="p-4 font-bold {% if p[4] <= 2 %}text-red-400{% else %}text-emerald-400{% endif %}">{{ p[4] }} {{ p[5] or 'un' }}</td>
                     <td class="p-4 text-center space-x-2">
                         <a href="{{ url_for('editar_produto', id=p[0]) }}" class="text-blue-400 hover:text-blue-300 font-semibold"><i class="fa-solid fa-pen"></i></a>
@@ -453,7 +462,7 @@ DESPESAS_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                     <td class="p-4 font-mono text-cyan-300">{{ d[0] }}</td>
                     <td class="p-4 font-semibold text-white">{{ d[1] }}</td>
                     <td class="p-4 text-slate-400">{{ d[2] }}</td>
-                    <td class="p-4 font-bold text-red-400">R$ {{ "%.2f"|format(d[3]) }}</td>
+                    <td class="p-4 font-bold text-red-400">{{ moeda_pt(d[3]) }}</td>
                     <td class="p-4 text-slate-300">{{ d[4] }}</td>
                     <td class="p-4 text-slate-400">{{ d[5] or '-' }}</td>
                     <td class="p-4 text-center">
@@ -538,7 +547,7 @@ LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}
                     <select name="produto_codigo[]" class="flex-2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
                         <option value="">Selecione um produto/insumo...</option>
                         {% for p in produtos %}
-                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - Custo Unit: R$ {{ "%.2f"|format(p[5] or 0.0) }} (Estoque: {{ p[3] }})</option>
+                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - Custo Unit: {{ moeda_pt(p[5] or 0.0) }} (Estoque: {{ p[3] }})</option>
                         {% endfor %}
                     </select>
                     <input type="number" step="0.01" name="produto_qtd[]" placeholder="Qtd" value="1" class="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
@@ -685,13 +694,13 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                             <br/><span class="text-xs text-amber-400 font-mono">Cheque nº {{ v[12] }} | Banco: {{ v[13] }} | Bom para: {{ v[16] }}</span>
                         {% endif %}
                     </td>
-                    <td class="p-4 text-slate-300">R$ {{ "%.2f"|format(v[5]) }}</td>
-                    <td class="p-4 text-red-400 font-semibold">R$ {{ "%.2f"|format(v[10] or 0.0) }}</td>
-                    <td class="p-4 text-cyan-400 font-bold">R$ {{ "%.2f"|format(v[5] - (v[10] or 0.0)) }}</td>
+                    <td class="p-4 text-slate-300">{{ moeda_pt(v[5]) }}</td>
+                    <td class="p-4 text-red-400 font-semibold">{{ moeda_pt(v[10] or 0.0) }}</td>
+                    <td class="p-4 text-cyan-400 font-bold">{{ moeda_pt(v[5] - (v[10] or 0.0)) }}</td>
                     <td class="p-4">
-                        <span class="text-emerald-400 font-semibold">R$ {{ "%.2f"|format(v[6]) }}</span>
+                        <span class="text-emerald-400 font-semibold">{{ moeda_pt(v[6]) }}</span>
                         {% if (v[5] - v[6]) > 0 %}
-                            <br/><span class="text-xs text-red-400 font-bold">Devendo: R$ {{ "%.2f"|format(v[5] - v[6]) }}</span>
+                            <br/><span class="text-xs text-red-400 font-bold">Devendo: {{ moeda_pt(v[5] - v[6]) }}</span>
                         {% endif %}
                     </td>
                     <td class="p-4 text-center space-y-1">
@@ -747,9 +756,21 @@ def index():
     cursor.execute("SELECT COUNT(*) FROM Produtos WHERE QtdEstoque <= 2")
     estoque_baixo = cursor.fetchone()[0]
 
-    cursor.execute("SELECT SUM(ValorPago) FROM Vendas")
-    res_receita = cursor.fetchone()
-    receita_mes = res_receita[0] if res_receita and res_receita[0] else 0.0
+    # Filtrar receita estritamente do mês atual para zerar na virada do mês
+    mes_atual_str = datetime.now().strftime("%Y-%m")
+    cursor.execute("SELECT ValorPago, DataCompra FROM Vendas")
+    todas_vendas = cursor.fetchall()
+    
+    receita_mes = 0.0
+    for v in todas_vendas:
+        val, data_str = v[0], v[1]
+        if val and data_str:
+            try:
+                dt = datetime.strptime(data_str.strip(), "%d/%m/%Y")
+                if dt.strftime("%Y-%m") == mes_atual_str:
+                    receita_mes += float(val)
+            except Exception:
+                pass
 
     cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos")
     produtos = cursor.fetchall()
@@ -1443,15 +1464,15 @@ def dashboard():
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow">
                 <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Receitas do Mês</p>
-                <p class="text-3xl font-extrabold text-emerald-400 mt-2">R$ {{ "%.2f"|format(total_receitas_mes) }}</p>
+                <p class="text-3xl font-extrabold text-emerald-400 mt-2">{{ moeda_pt(total_receitas_mes) }}</p>
             </div>
             <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow">
                 <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Despesas do Mês</p>
-                <p class="text-3xl font-extrabold text-red-400 mt-2">R$ {{ "%.2f"|format(total_despesas_mes) }}</p>
+                <p class="text-3xl font-extrabold text-red-400 mt-2">{{ moeda_pt(total_despesas_mes) }}</p>
             </div>
             <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow">
                 <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Saldo Líquido</p>
-                <p class="text-3xl font-extrabold {% if saldo_liquido_mes >= 0 %}text-cyan-400{% else %}text-red-400{% endif %} mt-2">R$ {{ "%.2f"|format(saldo_liquido_mes) }}</p>
+                <p class="text-3xl font-extrabold {% if saldo_liquido_mes >= 0 %}text-cyan-400{% else %}text-red-400{% endif %} mt-2">{{ moeda_pt(saldo_liquido_mes) }}</p>
             </div>
         </div>
     </div>
