@@ -14,9 +14,14 @@ from reportlab.lib import colors
 app = Flask(__name__)
 app.secret_key = 'lava_rapido_secret_key_autolub'
 
-# Função para formatar valores no padrão brasileiro (ex: 76.616,50)
+# Função corrigida para formatar valores no padrão brasileiro com proteção contra strings e nulos
 def moeda_pt(valor):
-    if valor is None:
+    try:
+        if valor is None or valor == "":
+            valor = 0.0
+        else:
+            valor = float(valor)
+    except (ValueError, TypeError):
         valor = 0.0
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -1473,7 +1478,7 @@ def dashboard():
             </div>
             <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
                 <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Despesas Operacionais</p>
-                <p class="text-2xl font-red-450 text-red-400 mt-2">{{ moeda_pt(total_despesas_mes) }}</p>
+                <p class="text-2xl font-bold text-red-400 mt-2">{{ moeda_pt(total_despesas_mes) }}</p>
             </div>
             <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
                 <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Lucro Líquido Real</p>
