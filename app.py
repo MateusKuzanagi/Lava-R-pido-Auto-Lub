@@ -1054,69 +1054,75 @@ def lancamento_servico(cliente_id):
     cursor = conexao.cursor()
 
     if request.method == 'POST':
-        servico_desc = request.form['servico_desc']
-        codigo_tributacao = request.form['codigo_tributacao']
-        local_prestacao = request.form['local_prestacao']
-        valor_total = float(request.form['valor_total'] or 0)
-        valor_pago = float(request.form['valor_pago'] or 0)
-        forma_pagto = request.form['forma_pagto']
-        obs = request.form['obs']
-        data_compra = datetime.now().strftime("%d/%m/%Y")
+        try:
+            servico_desc = request.form.get('servico_desc', '')
+            codigo_tributacao = request.form.get('codigo_tributacao', '')
+            local_prestacao = request.form.get('local_prestacao', '')
+            valor_total = float(request.form.get('valor_total') or 0)
+            valor_pago = float(request.form.get('valor_pago') or 0)
+            forma_pagto = request.form.get('forma_pagto', 'Pix')
+            obs = request.form.get('obs', '')
+            data_compra = datetime.now().strftime("%d/%m/%Y")
 
-        cheque_numero = request.form.get('cheque_numero', '')
-        cheque_banco = request.form.get('cheque_banco', '')
-        cheque_agencia = request.form.get('cheque_agencia', '')
-        cheque_conta = request.form.get('cheque_conta', '')
-        cheque_vencimento = request.form.get('cheque_vencimento', '')
+            cheque_numero = request.form.get('cheque_numero', '')
+            cheque_banco = request.form.get('cheque_banco', '')
+            cheque_agencia = request.form.get('cheque_agencia', '')
+            cheque_conta = request.form.get('cheque_conta', '')
+            cheque_vencimento = request.form.get('cheque_vencimento', '')
 
-        produtos_cod = request.form.getlist('produto_codigo[]')
-        produtos_qtd = request.form.getlist('produto_qtd[]')
+            produtos_cod = request.form.getlist('produto_codigo[]')
+            produtos_qtd = request.form.getlist('produto_qtd[]')
 
-        custo_total_insumos = 0.0
-        detalhes_insumos_lista = []
+            custo_total_insumos = 0.0
+            detalhes_insumos_lista = []
 
-        for cod, qtd_str in zip(produtos_cod, produtos_qtd):
-            if cod:
-                try:
-                    qtd_usada = float(qtd_str or 0)
-                    if DATABASE_URL:
-                        cursor.execute("SELECT NomeProduto, CustoCompra, UnidadeMedida FROM Produtos WHERE ID = %s", (cod,))
-                    else:
-                        cursor.execute("SELECT NomeProduto, CustoCompra, UnidadeMedida FROM Produtos WHERE ID = ?", (cod,))
-                    
-                    prod_info = cursor.fetchone()
-                    if prod_info:
-                        nome_prod, custo_unit, unidade = prod_info[0], float(prod_info[1] or 0.0), prod_info[2] or 'un'
-                        subtotal_custo = qtd_usada * custo_unit
-                        custo_total_insumos += subtotal_custo
-                        detalhes_insumos_lista.append(f"• {nome_prod}: {qtd_usada} {unidade} (Custo Unit: R$ {custo_unit:.2f} | Total: R$ {subtotal_custo:.2f})")
+            for cod, qtd_str in zip(produtos_cod, produtos_qtd):
+                if cod and cod.strip():
+                    try:
+                        qtd_usada = float(qtd_str or 0)
+                        if DATABASE_URL:
+                            cursor.execute("SELECT NomeProduto, CustoCompra, UnidadeMedida FROM Produtos WHERE ID = %s", (cod,))
+                        else:
+                            cursor.execute("SELECT NomeProduto, CustoCompra, UnidadeMedida FROM Produtos WHERE ID = ?", (cod,))
+                        
+                        prod_info = cursor.fetchone()
+                        if prod_info:
+                            nome_prod, custo_unit, unidade = prod_info[0], float(prod_info[1] or 0.0), prod_info[2] or 'un'
+                            subtotal_custo = qtd_usada * custo_unit
+                            custo_total_insumos += subtotal_custo
+                            detalhes_insumos_lista.append(f"• {nome_prod}: {qtd_usada} {unidade} (Custo Unit: R$ {custo_unit:.2f} | Total: R$ {subtotal_custo:.2f})")
 
-                    if DATABASE_URL:
-                        cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - %s WHERE ID = %s", (qtd_usada, cod))
-                    else:
-                        cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - ? WHERE ID = ?", (qtd_usada, cod))
-                except ValueError:
-                    pass
+                        if DATABASE_URL:
+                            cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - %s WHERE ID = %s", (qtd_usada, cod))
+                        else:
+                            cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - ? WHERE ID = ?", (qtd_usada, cod))
+                    except Exception:
+                        pass
 
-        detalhes_insumos_str = "<br/>".join(detalhes_insumos_lista) if detalhes_insumos_lista else "Nenhum insumo lançado."
-        lucro_liquido = valor_total - custo_total_insumos
+            detalhes_insumos_str = "<br/>".join(detalhes_insumos_lista) if detalhes_insumos_lista else "Nenhum insumo lançado."
+            lucro_liquido = valor_total - custo_total_insumos
 
-        if DATABASE_URL:
-            cursor.execute("""
-                INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, custo_total_insumos, detalhes_insumos_str, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
-        else:
-            cursor.execute("""
-                INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, custo_total_insumos, detalhes_insumos_str, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
-        
-        conexao.commit()
-        conexao.close()
-        
-        flash(f"🚀 <b>Serviço Lançado com Sucesso!</b><br/>💰 Valor Cobrado: R$ {valor_total:.2f} | 📦 Despesa/Custo de Insumos: R$ {custo_total_insumos:.2f} | ⭐ <b>Lucro Líquido: R$ {lucro_liquido:.2f}</b>", 'lucro')
-        return redirect(url_for('historico_cliente', cliente_id=cliente_id))
+            if DATABASE_URL:
+                cursor.execute("""
+                    INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, custo_total_insumos, detalhes_insumos_str, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
+            else:
+                cursor.execute("""
+                    INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, custo_total_insumos, detalhes_insumos_str, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
+            
+            conexao.commit()
+            conexao.close()
+            
+            flash(f"🚀 <b>Serviço Lançado com Sucesso!</b><br/>💰 Valor Cobrado: R$ {valor_total:.2f} | 📦 Despesa/Custo de Insumos: R$ {custo_total_insumos:.2f} | ⭐ <b>Lucro Líquido: R$ {lucro_liquido:.2f}</b>", 'lucro')
+            return redirect(url_for('historico_cliente', cliente_id=cliente_id))
+        except Exception as e:
+            conexao.rollback()
+            conexao.close()
+            flash(f"Erro ao lançar serviço: {str(e)}", 'error')
+            return redirect(url_for('lancamento_servico', cliente_id=cliente_id))
 
     cursor.execute("SELECT * FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
     cliente = cursor.fetchone()
@@ -1397,7 +1403,6 @@ def dashboard():
     conexao = get_db_connection()
     cursor = conexao.cursor()
     
-    # CORREÇÃO DO LUCRO: Busca o ValorPago E o CustoInsumos das vendas do mês
     cursor.execute("SELECT ValorPago, CustoInsumos, DataCompra FROM Vendas")
     vendas = cursor.fetchall()
     
@@ -1430,7 +1435,6 @@ def dashboard():
             except Exception:
                 pass
 
-    # O lucro líquido real subtrai tanto as despesas operacionais quanto o custo dos produtos gastos nos serviços
     saldo_liquido_mes = total_receitas_mes - total_custo_insumos_mes - total_despesas_mes
 
     anos_meses = [
@@ -1469,7 +1473,7 @@ def dashboard():
             </div>
             <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
                 <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Despesas Operacionais</p>
-                <p class="text-2xl font-bold text-red-400 mt-2">{{ moeda_pt(total_despesas_mes) }}</p>
+                <p class="text-2xl font-red-450 text-red-400 mt-2">{{ moeda_pt(total_despesas_mes) }}</p>
             </div>
             <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
                 <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Lucro Líquido Real</p>
