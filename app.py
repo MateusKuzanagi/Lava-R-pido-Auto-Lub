@@ -1,0 +1,1535 @@
+from flask import Flask, render_template_string, request, redirect, url_for, session, flash, send_file
+import sqlite3
+import psycopg
+from datetime import datetime
+import os
+from io import BytesIO
+import io
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'troque-esta-chave-em-producao')
+
+# Função corrigida para formatar valores no padrão brasileiro com proteção contra strings e nulos
+def moeda_pt(valor):
+    try:
+        if valor is None or valor == "":
+            valor = 0.0
+        else:
+            valor = float(valor)
+    except (ValueError, TypeError):
+        valor = 0.0
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+# Torna a função acessível diretamente dentro dos templates HTML do Flask
+app.jinja_env.globals.update(moeda_pt=moeda_pt)
+
+# Detecta se está no Render usando PostgreSQL ou rodando local com SQLite
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+def get_db_connection():
+    if DATABASE_URL:
+        return psycopg.connect(DATABASE_URL)
+    else:
+        conexao = sqlite3.connect("LavaRapidoAutoLub.db", timeout=30)
+        return conexao
+
+def init_db():
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+
+    if DATABASE_URL:
+        # Tabelas para PostgreSQL (Supabase / Render)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Usuarios(
+                ID SERIAL PRIMARY KEY, 
+                Nome TEXT UNIQUE, 
+                Senha TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Clientes(
+                ID SERIAL PRIMARY KEY, 
+                Nome TEXT, 
+                Endereco TEXT, 
+                Telefone TEXT, 
+                CnpjCpf TEXT,
+                InscricaoMunicipal TEXT,
+                Email TEXT,
+                Cep TEXT,
+                ModeloMoto TEXT, 
+                AnoMoto TEXT, 
+                KM TEXT, 
+                Placa TEXT,
+                KMEntrada TEXT,
+                KMSaida TEXT,
+                DataEntrada TEXT,
+                DataSaida TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Vendas(
+                ID SERIAL PRIMARY KEY, 
+                ClienteID INTEGER, 
+                Servico TEXT, 
+                CodigoTributacao TEXT,
+                LocalPrestacao TEXT,
+                ValorTotal REAL, 
+                ValorPago REAL, 
+                DataCompra TEXT,
+                FormaPagamento TEXT,
+                Observacao TEXT,
+                CustoInsumos REAL DEFAULT 0.0,
+                DetalhesInsumos TEXT,
+                ChequeNumero TEXT,
+                ChequeBanco TEXT,
+                ChequeAgencia TEXT,
+                ChequeConta TEXT,
+                ChequeVencimento TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Produtos(
+                ID TEXT PRIMARY KEY, 
+                NomeProduto TEXT, 
+                Descricao TEXT, 
+                Preco REAL, 
+                QtdEstoque REAL DEFAULT 0.0, 
+                UnidadeMedida TEXT DEFAULT 'un', 
+                CustoCompra REAL DEFAULT 0.0
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Despesas(
+                ID SERIAL PRIMARY KEY, 
+                Descricao TEXT, 
+                Categoria TEXT, 
+                Valor REAL, 
+                DataDespesa TEXT, 
+                Observacao TEXT
+            )
+        """)
+        
+        # MIGRACAO: atualiza bancos Supabase ja existentes sem apagar dados.
+        # CREATE TABLE IF NOT EXISTS nao adiciona colunas em tabelas antigas.
+        migracoes = {
+            "Clientes": [
+                ("Endereco", "TEXT"), ("Telefone", "TEXT"), ("CnpjCpf", "TEXT"),
+                ("InscricaoMunicipal", "TEXT"), ("Email", "TEXT"), ("Cep", "TEXT"),
+                ("ModeloMoto", "TEXT"), ("AnoMoto", "TEXT"), ("KM", "TEXT"),
+                ("Placa", "TEXT"), ("KMEntrada", "TEXT"), ("KMSaida", "TEXT"),
+                ("DataEntrada", "TEXT"), ("DataSaida", "TEXT")
+            ],
+            "Vendas": [
+                ("ClienteID", "INTEGER"), ("Servico", "TEXT"),
+                ("CodigoTributacao", "TEXT"), ("LocalPrestacao", "TEXT"),
+                ("ValorTotal", "DOUBLE PRECISION DEFAULT 0"),
+                ("ValorPago", "DOUBLE PRECISION DEFAULT 0"), ("DataCompra", "TEXT"),
+                ("FormaPagamento", "TEXT"), ("Observacao", "TEXT"),
+                ("CustoInsumos", "DOUBLE PRECISION DEFAULT 0"),
+                ("DetalhesInsumos", "TEXT"), ("ChequeNumero", "TEXT"),
+                ("ChequeBanco", "TEXT"), ("ChequeAgencia", "TEXT"),
+                ("ChequeConta", "TEXT"), ("ChequeVencimento", "TEXT")
+            ],
+            "Produtos": [
+                ("NomeProduto", "TEXT"), ("Descricao", "TEXT"),
+                ("Preco", "DOUBLE PRECISION DEFAULT 0"),
+                ("QtdEstoque", "DOUBLE PRECISION DEFAULT 0"),
+                ("UnidadeMedida", "TEXT DEFAULT 'un'"),
+                ("CustoCompra", "DOUBLE PRECISION DEFAULT 0")
+            ],
+            "Despesas": [
+                ("Descricao", "TEXT"), ("Categoria", "TEXT"),
+                ("Valor", "DOUBLE PRECISION DEFAULT 0"),
+                ("DataDespesa", "TEXT"), ("Observacao", "TEXT")
+            ],
+            "Usuarios": [("Nome", "TEXT"), ("Senha", "TEXT")]
+        }
+        for tabela, colunas in migracoes.items():
+            for coluna, tipo in colunas:
+                cursor.execute(
+                    f'ALTER TABLE {tabela} ADD COLUMN IF NOT EXISTS {coluna} {tipo}'
+                )
+
+        usuarios_padrao = [('admin', '123'), ('maironxd', '14125'), ('luana', '14125'), ('josue', '123')]
+        for user, senha in usuarios_padrao:
+            cursor.execute("SELECT * FROM Usuarios WHERE Nome=%s", (user,))
+            if not cursor.fetchone():
+                cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (%s, %s)", (user, senha))
+    else:
+        # Tabelas para SQLite (Local)
+        cursor.execute("CREATE TABLE IF NOT EXISTS Usuarios(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT UNIQUE, Senha TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS Clientes(ID INTEGER PRIMARY KEY AUTOINCREMENT, Nome TEXT, Endereco TEXT, Telefone TEXT, ModeloMoto TEXT, AnoMoto TEXT, KM TEXT, Placa TEXT)")
+        
+        colunas_novas_clientes = [
+            ("CnpjCpf", "TEXT"), ("InscricaoMunicipal", "TEXT"), ("Email", "TEXT"), ("Cep", "TEXT"),
+            ("ModeloMoto", "TEXT"), ("AnoMoto", "TEXT"), ("KM", "TEXT"), ("KMEntrada", "TEXT"), 
+            ("KMSaida", "TEXT"), ("DataEntrada", "TEXT"), ("DataSaida", "TEXT"), ("Placa", "TEXT")
+        ]
+        for col, tipo in colunas_novas_clientes:
+            try: cursor.execute(f"ALTER TABLE Clientes ADD COLUMN {col} {tipo}")
+            except Exception: pass
+
+        cursor.execute("CREATE TABLE IF NOT EXISTS Vendas(ID INTEGER PRIMARY KEY AUTOINCREMENT, ClienteID INTEGER, Servico TEXT, ValorTotal REAL, ValorPago REAL, DataCompra TEXT)")
+        
+        colunas_novas_vendas = [
+            ("FormaPagamento", "TEXT"), ("Observacao", "TEXT"), ("CustoInsumos", "REAL DEFAULT 0.0"), ("DetalhesInsumos", "TEXT"),
+            ("CodigoTributacao", "TEXT"), ("LocalPrestacao", "TEXT"),
+            ("ChequeNumero", "TEXT"), ("ChequeBanco", "TEXT"), ("ChequeAgencia", "TEXT"), 
+            ("ChequeConta", "TEXT"), ("ChequeVencimento", "TEXT")
+        ]
+        for col, tipo in colunas_novas_vendas:
+            try: cursor.execute(f"ALTER TABLE Vendas ADD COLUMN {col} {tipo}")
+            except Exception: pass
+
+        cursor.execute("CREATE TABLE IF NOT EXISTS Produtos(ID TEXT PRIMARY KEY, NomeProduto TEXT, Descricao TEXT, Preco REAL, QtdEstoque REAL DEFAULT 0.0, UnidadeMedida TEXT DEFAULT 'un', CustoCompra REAL DEFAULT 0.0)")
+        
+        colunas_novas_produtos = [("QtdEstoque", "REAL DEFAULT 0.0"), ("UnidadeMedida", "TEXT"), ("CustoCompra", "REAL DEFAULT 0.0")]
+        for col, tipo in colunas_novas_produtos:
+            try: cursor.execute(f"ALTER TABLE Produtos ADD COLUMN {col} {tipo}")
+            except Exception: pass
+
+        cursor.execute("CREATE TABLE IF NOT EXISTS Despesas(ID INTEGER PRIMARY KEY AUTOINCREMENT, Descricao TEXT, Categoria TEXT, Valor REAL, DataDespesa TEXT, Observacao TEXT)")
+
+        usuarios_padrao = [('admin', '123'), ('maironxd', '14125'), ('luana', '14125'), ('josue', '123')]
+        for user, senha in usuarios_padrao:
+            cursor.execute("SELECT * FROM Usuarios WHERE Nome=?", (user,))
+            if not cursor.fetchone():
+                cursor.execute("INSERT INTO Usuarios (Nome, Senha) VALUES (?, ?)", (user, senha))
+
+    conexao.commit()
+    conexao.close()
+
+init_db()
+
+BASE_LAYOUT = """
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lava Rápido Auto Lub - Web</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col">
+    {% if session.get('usuario') %}
+    <nav class="bg-slate-900 border-b border-slate-800 px-6 py-4 flex justify-between items-center shadow-md">
+        <div class="flex items-center space-x-3">
+            <i class="fa-solid fa-car-wash text-cyan-400 text-2xl"></i>
+            <span class="text-xl font-bold tracking-wide text-cyan-400">Lava Rápido Auto Lub</span>
+        </div>
+        <div class="flex items-center space-x-6 text-sm font-medium">
+            <a href="{{ url_for('index') }}" class="hover:text-cyan-400 transition"><i class="fa-solid fa-boxes-stacked mr-1"></i> Estoque</a>
+            <a href="{{ url_for('clientes') }}" class="hover:text-cyan-400 transition"><i class="fa-solid fa-users mr-1"></i> Clientes</a>
+            <a href="{{ url_for('despesas') }}" class="hover:text-cyan-400 transition"><i class="fa-solid fa-wallet mr-1"></i> Despesas</a>
+            <a href="{{ url_for('dashboard') }}" class="hover:text-cyan-400 transition"><i class="fa-solid fa-chart-line mr-1"></i> Dashboard</a>
+            <a href="{{ url_for('logout') }}" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg shadow transition"><i class="fa-solid fa-right-from-bracket mr-1"></i> Sair</a>
+        </div>
+    </nav>
+    {% endif %}
+
+    <main class="flex-1 p-6 max-w-7xl mx-auto w-full">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="mb-4 p-4 rounded-xl text-sm font-semibold shadow-md {% if category == 'error' %}bg-red-900/50 border border-red-700 text-red-200{% elif category == 'lucro' %}bg-cyan-900/80 border border-cyan-500 text-cyan-100 text-base shadow-xl animate-pulse{% else %}bg-emerald-900/50 border border-emerald-700 text-emerald-200{% endif %}">
+                        {{ message | safe }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>
+"""
+
+LOGIN_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
+<div class="flex items-center justify-center min-h-[80vh]">
+    <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-800 w-full max-w-md">
+        <div class="text-center mb-6">
+            <i class="fa-solid fa-shield-halved text-cyan-400 text-4xl mb-2"></i>
+            <h1 class="text-2xl font-bold text-white">Lava Rápido Auto Lub</h1>
+            <p class="text-slate-400 text-sm">Faça login para acessar o sistema</p>
+        </div>
+        <form method="POST" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Usuário</label>
+                <input type="text" name="usuario" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-cyan-400">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Senha</label>
+                <input type="password" name="senha" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-cyan-400">
+            </div>
+            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow-lg transition duration-200">ENTRAR</button>
+        </form>
+    </div>
+</div>
+""")
+
+INDEX_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-boxes-stacked text-cyan-400 mr-2"></i> Gestão de Produtos e Insumos</h1>
+        <div class="space-x-2 flex">
+            <a href="{{ url_for('gerar_pdf_estoque') }}" class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-file-pdf mr-2"></i> Exportar Estoque PDF</a>
+            <a href="{{ url_for('novo_produto') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-plus mr-2"></i> Novo Produto/Insumo</a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
+            <p class="text-slate-400 text-xs font-bold uppercase">Cadastrados</p>
+            <p class="text-2xl font-bold text-white mt-1">{{ total_cadastrados }}</p>
+        </div>
+        <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
+            <p class="text-slate-400 text-xs font-bold uppercase">Valor Estoque (Custo)</p>
+            <p class="text-2xl font-bold text-emerald-400 mt-1">{{ moeda_pt(valor_estoque) }}</p>
+        </div>
+        <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
+            <p class="text-slate-400 text-xs font-bold uppercase">Receita do Mês</p>
+            <p class="text-2xl font-bold text-cyan-400 mt-1">{{ moeda_pt(receita_mes) }}</p>
+        </div>
+        <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
+            <p class="text-slate-400 text-xs font-bold uppercase">Estoque Baixo</p>
+            <p class="text-2xl font-bold text-red-400 mt-1">{{ estoque_baixo }} itens</p>
+        </div>
+    </div>
+
+    <div class="bg-slate-900 rounded-xl border border-slate-800 shadow overflow-hidden">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr class="bg-slate-950 text-cyan-400 text-xs uppercase tracking-wider border-b border-slate-800">
+                    <th class="p-4">Código</th>
+                    <th class="p-4">Produto / Insumo</th>
+                    <th class="p-4">Descrição</th>
+                    <th class="p-4">Preço Cobrado</th>
+                    <th class="p-4">Custo Unitário</th>
+                    <th class="p-4">Estoque Atual</th>
+                    <th class="p-4 text-center">Ações</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-sm">
+                {% for p in produtos %}
+                <tr class="hover:bg-slate-800/50 transition">
+                    <td class="p-4 font-mono text-cyan-300">{{ p[0] }}</td>
+                    <td class="p-4 font-semibold text-white">{{ p[1] }}</td>
+                    <td class="p-4 text-slate-400">{{ p[2] or '-' }}</td>
+                    <td class="p-4 text-slate-300">{{ moeda_pt(p[3] or 0.0) }}</td>
+                    <td class="p-4 text-amber-400">{{ moeda_pt(p[6] or 0.0) }}</td>
+                    <td class="p-4 font-bold {% if p[4] <= 2 %}text-red-400{% else %}text-emerald-400{% endif %}">{{ p[4] }} {{ p[5] or 'un' }}</td>
+                    <td class="p-4 text-center space-x-2">
+                        <a href="{{ url_for('editar_produto', id=p[0]) }}" class="text-blue-400 hover:text-blue-300 font-semibold"><i class="fa-solid fa-pen"></i></a>
+                        <a href="{{ url_for('excluir_produto', id=p[0]) }}" onclick="return confirm('Deseja excluir este item?')" class="text-red-400 hover:text-red-300 font-semibold"><i class="fa-solid fa-trash"></i></a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+""")
+
+CLIENTES_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-users text-cyan-400 mr-2"></i> Gestão de Clientes e Veículos (Ordem Alfabética)</h1>
+        <a href="{{ url_for('novo_cliente') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-plus mr-2"></i> Novo Cliente</a>
+    </div>
+
+    <div class="bg-slate-900 rounded-xl border border-slate-800 shadow overflow-hidden">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr class="bg-slate-950 text-cyan-400 text-xs uppercase tracking-wider border-b border-slate-800">
+                    <th class="p-4">ID</th>
+                    <th class="p-4">Nome / Empresa</th>
+                    <th class="p-4">CNPJ / CPF</th>
+                    <th class="p-4">Telefone</th>
+                    <th class="p-4">Veículo / Placa</th>
+                    <th class="p-4 text-center">Ações</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-sm">
+                {% for c in clientes %}
+                <tr class="hover:bg-slate-800/50 transition">
+                    <td class="p-4 font-mono text-cyan-300">{{ c[0] }}</td>
+                    <td class="p-4 font-semibold text-white">{{ c[1] }}</td>
+                    <td class="p-4 text-slate-300 font-mono">{{ c[2] or '-' }}</td>
+                    <td class="p-4 text-slate-300">{{ c[3] or '-' }}</td>
+                    <td class="p-4 text-slate-300">{{ c[4] or '-' }} / <span class="text-cyan-400 font-mono">{{ c[5] or '-' }}</span></td>
+                    <td class="p-4 text-center space-x-2">
+                        <a href="{{ url_for('lancamento_servico', cliente_id=c[0]) }}" class="bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 px-3 py-1 rounded-lg text-xs font-bold" title="Lançar Serviço"><i class="fa-solid fa-cash-register"></i> Serviço</a>
+                        <a href="{{ url_for('historico_cliente', cliente_id=c[0]) }}" class="bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 px-3 py-1 rounded-lg text-xs font-bold" title="Histórico"><i class="fa-solid fa-clock-rotate-left"></i> Histórico</a>
+                        <a href="{{ url_for('editar_cliente', id=c[0]) }}" class="text-blue-400 hover:text-blue-300"><i class="fa-solid fa-pen"></i></a>
+                        <a href="{{ url_for('excluir_cliente', id=c[0]) }}" onclick="return confirm('Excluir cliente e histórico?')" class="text-red-400 hover:text-red-300"><i class="fa-solid fa-trash"></i></a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+""")
+
+FORM_PRODUTO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
+<div class="max-w-xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
+    <h1 class="text-xl font-bold text-white mb-6"><i class="fa-solid fa-box text-cyan-400 mr-2"></i> {{ titulo }}</h1>
+    <form method="POST" class="space-y-4">
+        <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Código / ID</label>
+            <input type="text" name="id" value="{{ p[0] if p else '' }}" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Nome do Produto / Insumo</label>
+            <input type="text" name="nome" value="{{ p[1] if p else '' }}" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Descrição</label>
+            <input type="text" name="desc" value="{{ p[2] if p else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Preço de Venda (R$)</label>
+                <input type="number" step="0.01" name="preco" value="{{ p[3] if p else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Quantidade em Estoque</label>
+                <input type="number" step="0.01" name="qtd" value="{{ p[4] if p else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Unidade de Medida</label>
+                <select name="unidade" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                    <option value="L (Litros)" {% if p and p[5]=='L (Litros)' %}selected{% endif %}>L (Litros)</option>
+                    <option value="ml" {% if p and p[5]=='ml' %}selected{% endif %}>ml</option>
+                    <option value="kg" {% if p and p[5]=='kg' %}selected{% endif %}>kg</option>
+                    <option value="g" {% if p and p[5]=='g' %}selected{% endif %}>g</option>
+                    <option value="un (Unidades)" {% if p and p[5]=='un (Unidades)' %}selected{% endif %}>un (Unidades)</option>
+                    <option value="galão" {% if p and p[5]=='galão' %}selected{% endif %}>galão</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Custo Unitário de Compra (R$)</label>
+                <input type="number" step="0.01" name="custo" value="{{ p[6] if p else '' }}" placeholder="Quanto custa para você" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+        <div class="flex space-x-4 pt-4">
+            <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg shadow">Salvar</button>
+            <a href="{{ url_for('index') }}" class="flex-1 bg-slate-800 hover:bg-slate-700 text-center py-2.5 rounded-lg text-slate-300 font-bold">Cancelar</a>
+        </div>
+    </form>
+</div>
+""")
+
+FORM_CLIENTE_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
+<div class="max-w-2xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
+    <h1 class="text-xl font-bold text-white mb-6"><i class="fa-solid fa-user text-cyan-400 mr-2"></i> {{ titulo }}</h1>
+    <form method="POST" class="space-y-4">
+        <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Nome / Nome Empresarial</label>
+            <input type="text" name="nome" value="{{ c[1] if c else '' }}" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">CNPJ / CPF / NIF</label>
+                <input type="text" name="cnpj_cpf" value="{{ c[2] if c else '' }}" placeholder="00.000.000/0001-00" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Inscrição Municipal</label>
+                <input type="text" name="inscricao_municipal" value="{{ c[3] if c else '' }}" placeholder="Isento ou número" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Telefone</label>
+                <input type="text" name="telefone" value="{{ c[4] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">E-mail</label>
+                <input type="email" name="email" value="{{ c[5] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Endereço Completo</label>
+            <input type="text" name="endereco" value="{{ c[6] if c else '' }}" placeholder="Rua, Número, Bairro, Cidade - UF" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+        </div>
+        <div class="grid grid-cols-3 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">CEP</label>
+                <input type="text" name="cep" value="{{ c[7] if c else '' }}" placeholder="00000-000" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Modelo Veículo</label>
+                <input type="text" name="modelo" value="{{ c[8] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Placa</label>
+                <input type="text" name="placa" value="{{ c[9] if c else '' }}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+        <div class="flex space-x-4 pt-4">
+            <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg shadow">Salvar Cliente</button>
+            <a href="{{ url_for('clientes') }}" class="flex-1 bg-slate-800 hover:bg-slate-700 text-center py-2.5 rounded-lg text-slate-300 font-bold">Cancelar</a>
+        </div>
+    </form>
+</div>
+""")
+
+DESPESAS_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-wallet text-orange-400 mr-2"></i> Controle de Despesas</h1>
+        <a href="{{ url_for('nova_despesa') }}" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-semibold shadow transition flex items-center"><i class="fa-solid fa-plus mr-2"></i> Nova Despesa</a>
+    </div>
+
+    <div class="bg-slate-900 rounded-xl border border-slate-800 shadow overflow-hidden">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr class="bg-slate-950 text-orange-400 text-xs uppercase tracking-wider border-b border-slate-800">
+                    <th class="p-4">ID</th>
+                    <th class="p-4">Descrição</th>
+                    <th class="p-4">Categoria</th>
+                    <th class="p-4">Valor</th>
+                    <th class="p-4">Data</th>
+                    <th class="p-4">Observação</th>
+                    <th class="p-4 text-center">Ações</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-sm">
+                {% for d in despesas %}
+                <tr class="hover:bg-slate-800/50 transition">
+                    <td class="p-4 font-mono text-cyan-300">{{ d[0] }}</td>
+                    <td class="p-4 font-semibold text-white">{{ d[1] }}</td>
+                    <td class="p-4 text-slate-400">{{ d[2] }}</td>
+                    <td class="p-4 font-bold text-red-400">{{ moeda_pt(d[3]) }}</td>
+                    <td class="p-4 text-slate-300">{{ d[4] }}</td>
+                    <td class="p-4 text-slate-400">{{ d[5] or '-' }}</td>
+                    <td class="p-4 text-center">
+                        <a href="{{ url_for('excluir_despesa', id=d[0]) }}" onclick="return confirm('Excluir despesa?')" class="text-red-400 hover:text-red-300"><i class="fa-solid fa-trash"></i></a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+""")
+
+FORM_DESPESA_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
+<div class="max-w-xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
+    <h1 class="text-xl font-bold text-white mb-6"><i class="fa-solid fa-receipt text-orange-400 mr-2"></i> Nova Despesa</h1>
+    <form method="POST" class="space-y-4">
+        <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Descrição</label>
+            <input type="text" name="descricao" required placeholder="Ex: Aluguel do Barracão" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Categoria</label>
+            <select name="categoria" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                <option value="Aluguel">Aluguel</option>
+                <option value="Água">Água</option>
+                <option value="Luz">Luz</option>
+                <option value="Internet">Internet</option>
+                <option value="Produtos/Limpeza">Produtos/Limpeza</option>
+                <option value="Manutenção">Manutenção</option>
+                <option value="Outros">Outros</option>
+            </select>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Valor (R$)</label>
+                <input type="number" step="0.01" name="valor" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Data (DD/MM/AAAA)</label>
+                <input type="text" name="data" value="{{ hoje }}" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Observação</label>
+            <input type="text" name="obs" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+        </div>
+        <div class="flex space-x-4 pt-4">
+            <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg shadow">Salvar Despesa</button>
+            <a href="{{ url_for('despesas') }}" class="flex-1 bg-slate-800 hover:bg-slate-700 text-center py-2.5 rounded-lg text-slate-300 font-bold">Cancelar</a>
+        </div>
+    </form>
+</div>
+""")
+
+LANCAMENTO_SERVICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
+<div class="max-w-3xl mx-auto bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-xl">
+    <h1 class="text-xl font-bold text-white mb-2"><i class="fa-solid fa-cash-register text-cyan-400 mr-2"></i> Lançar Serviço e Insumos da Lavação</h1>
+    <p class="text-slate-400 text-sm mb-6">Cliente: <span class="text-cyan-400 font-semibold">{{ cliente[1] }}</span> (CNPJ/CPF: {{ cliente[2] or 'Não informado' }})</p>
+
+    <form method="POST" class="space-y-6">
+        <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Descrição do Serviço (Ex: Valor Nota Fiscal : lavação caminhão)</label>
+            <input type="text" name="servico_desc" required placeholder="Ex: Valor Nota Fiscal : lavação caminhão" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Código de Tributação Nacional</label>
+                <input type="text" name="codigo_tributacao" value="14.01.01 - Lubrificação, limpeza, lustração..." class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white text-sm">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Local da Prestação</label>
+                <input type="text" name="local_prestacao" value="Córrego Fundo - MG" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white text-sm">
+            </div>
+        </div>
+
+        <div class="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
+            <h3 class="text-sm font-bold text-cyan-400 uppercase tracking-wide"><i class="fa-solid fa-boxes-stacked mr-1"></i> Baixa de Insumos/Produtos no Estoque (Custo Calculado Automaticamente)</h3>
+            <div id="itens-container" class="space-y-3">
+                <div class="flex gap-2 items-center item-row">
+                    <select name="produto_codigo[]" class="flex-2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                        <option value="">Selecione um produto/insumo...</option>
+                        {% for p in produtos %}
+                        <option value="{{ p[0] }}">[{{ p[0] }}] {{ p[1] }} - Custo Unit: {{ moeda_pt(p[5] or 0.0) }} (Estoque: {{ p[3] }})</option>
+                        {% endfor %}
+                    </select>
+                    <input type="number" step="0.01" name="produto_qtd[]" placeholder="Qtd" value="1" class="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                    <button type="button" onclick="removerLinha(this)" class="bg-red-600/20 text-red-400 hover:bg-red-600 hover:text-white px-3 py-2 rounded-lg text-sm transition"><i class="fa-solid fa-trash"></i></button>
+                </div>
+            </div>
+            <button type="button" onclick="adicionarLinha()" class="mt-2 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold transition"><i class="fa-solid fa-plus mr-1"></i> Adicionar Outro Item</button>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Valor do Serviço / Total da NFS-e (R$)</label>
+                <input type="number" step="0.01" name="valor_total" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Valor Pago (R$)</label>
+                <input type="number" step="0.01" name="valor_pago" required class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Forma de Pagamento</label>
+                <select name="forma_pagto" id="forma_pagto" onchange="toggleChequeFields()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+                    <option value="Pix">Pix</option>
+                    <option value="Dinheiro">Dinheiro</option>
+                    <option value="Cartão de Crédito">Cartão de Crédito</option>
+                    <option value="Cartão de Débito">Cartão de Débito</option>
+                    <option value="Cheque">Cheque</option>
+                    <option value="A prazo">A prazo</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1">Observações Adicionais</label>
+                <input type="text" name="obs" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+
+        <!-- Campos adicionais caso a forma de pagamento seja Cheque -->
+        <div id="cheque-fields" class="space-y-4 bg-slate-950 p-4 rounded-xl border border-slate-800 hidden">
+            <h3 class="text-sm font-bold text-amber-400 uppercase tracking-wide"><i class="fa-solid fa-money-check mr-1"></i> Informações do Cheque</h3>
+            <div class="grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Número do Cheque</label>
+                    <input type="text" name="cheque_numero" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Banco</label>
+                    <input type="text" name="cheque_banco" placeholder="Ex: Banco do Brasil" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Agência</label>
+                    <input type="text" name="cheque_agencia" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Conta Corrente</label>
+                    <input type="text" name="cheque_conta" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Bom Para (Vencimento)</label>
+                    <input type="text" name="cheque_vencimento" placeholder="DD/MM/AAAA" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm">
+                </div>
+            </div>
+        </div>
+
+        <div class="pt-4">
+            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow transition">FINALIZAR LANÇAMENTO E CALCULAR LUCRO</button>
+        </div>
+    </form>
+</div>
+
+<script>
+function adicionarLinha() {
+    const container = document.getElementById('itens-container');
+    const primeiraLinha = container.querySelector('.item-row');
+    const novaLinha = primeiraLinha.cloneNode(true);
+    novaLinha.querySelector('input').value = '1';
+    novaLinha.querySelector('select').selectedIndex = 0;
+    container.appendChild(novaLinha);
+}
+function removerLinha(btn) {
+    const container = document.getElementById('itens-container');
+    if (container.querySelectorAll('.item-row').length > 1) {
+        btn.closest('.item-row').remove();
+    } else {
+        alert('Você deve manter pelo menos uma linha de item.');
+    }
+}
+function toggleChequeFields() {
+    const formaPagto = document.getElementById('forma_pagto').value;
+    const chequeFields = document.getElementById('cheque-fields');
+    if (formaPagto === 'Cheque') {
+        chequeFields.classList.remove('hidden');
+    } else {
+        chequeFields.classList.add('hidden');
+    }
+}
+</script>
+""")
+
+HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
+<div class="space-y-6">
+    <div class="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow flex justify-between items-center">
+        <div>
+            <h1 class="text-xl font-bold text-white"><i class="fa-solid fa-user text-cyan-400 mr-2"></i> Prontuário: {{ cliente[1] }}</h1>
+            <p class="text-slate-400 text-sm mt-1">CNPJ/CPF: {{ cliente[2] or 'N/I' }} | Tel: {{ cliente[4] or 'N/I' }} | Veículo: {{ cliente[8] or 'N/A' }} (Placa: {{ cliente[9] or 'N/A' }})</p>
+        </div>
+        <div class="space-x-2 flex">
+            <a href="{{ url_for('gerar_pdf_cliente', cliente_id=cliente[0]) }}" class="bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition inline-flex items-center"><i class="fa-solid fa-file-pdf mr-2"></i> Extrato PDF</a>
+            <a href="{{ url_for('clientes') }}" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-lg text-sm font-semibold">Voltar</a>
+        </div>
+    </div>
+
+    <div class="bg-slate-900 rounded-xl border border-slate-800 shadow overflow-hidden">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr class="bg-slate-950 text-cyan-400 text-xs uppercase tracking-wider border-b border-slate-800">
+                    <th class="p-4">OS #</th>
+                    <th class="p-4">Data</th>
+                    <th class="p-4">Serviço / Insumos Utilizados</th>
+                    <th class="p-4">Total</th>
+                    <th class="p-4">Custo Insumos</th>
+                    <th class="p-4">Lucro Líquido</th>
+                    <th class="p-4">Pago / Saldo</th>
+                    <th class="p-4 text-center">Ações</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-sm">
+                {% for v in vendas %}
+                <tr class="hover:bg-slate-800/50 transition">
+                    <td class="p-4 font-mono text-cyan-300">{{ v[0] }}</td>
+                    <td class="p-4 text-slate-300">{{ v[7] }}</td>
+                    <td class="p-4 text-white">
+                        <span class="font-bold">{{ v[2] }}</span>
+                        {% if v[11] %}
+                            <div class="mt-1 bg-slate-950 p-2 rounded border border-slate-800 text-xs text-slate-300">
+                                <span class="text-cyan-400 font-semibold"><i class="fa-solid fa-box-open mr-1"></i> Produtos gastos:</span><br/>
+                                {{ v[11] | safe }}
+                            </div>
+                        {% endif %}
+                        {% if v[8] == 'Cheque' and v[12] %}
+                            <br/><span class="text-xs text-amber-400 font-mono">Cheque nº {{ v[12] }} | Banco: {{ v[13] }} | Bom para: {{ v[16] }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="p-4 text-slate-300">{{ moeda_pt(v[5]) }}</td>
+                    <td class="p-4 text-red-400 font-semibold">{{ moeda_pt(v[10] or 0.0) }}</td>
+                    <td class="p-4 text-cyan-400 font-bold">{{ moeda_pt(v[5] - (v[10] or 0.0)) }}</td>
+                    <td class="p-4">
+                        <span class="text-emerald-400 font-semibold">{{ moeda_pt(v[6]) }}</span>
+                        {% if (v[5] - v[6]) > 0 %}
+                            <br/><span class="text-xs text-red-400 font-bold">Devendo: {{ moeda_pt(v[5] - v[6]) }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="p-4 text-center space-y-1">
+                        <a href="{{ url_for('gerar_pdf_custos_venda', venda_id=v[0]) }}" class="block bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30 px-2 py-1 rounded text-xs font-bold" title="PDF com os Custos"><i class="fa-solid fa-file-pdf"></i> PDF Custos</a>
+                        <a href="{{ url_for('gerar_nf', venda_id=v[0]) }}" class="block text-amber-400 hover:text-amber-300 text-xs font-bold" title="Gerar Nota Fiscal (PDF)"><i class="fa-solid fa-file-invoice"></i> Nota Fiscal</a>
+                        <a href="{{ url_for('excluir_venda', id=v[0]) }}" onclick="return confirm('Excluir esta OS?')" class="block text-red-400 hover:text-red-300 text-xs"><i class="fa-solid fa-trash"></i> Excluir</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+""")
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        usuario = request.form['usuario']
+        senha = request.form['senha']
+        conexao = get_db_connection()
+        cursor = conexao.cursor()
+        cursor.execute("SELECT * FROM Usuarios WHERE Nome=%s AND Senha=%s" if DATABASE_URL else "SELECT * FROM Usuarios WHERE Nome=? AND Senha=?", (usuario, senha))
+        user = cursor.fetchone()
+        conexao.close()
+        if user:
+            session['usuario'] = usuario
+            return redirect(url_for('index'))
+        else:
+            flash('Usuário ou senha incorretos!', 'error')
+    return render_template_string(LOGIN_HTML)
+
+@app.route('/logout')
+def logout():
+    session.pop('usuario', None)
+    return redirect(url_for('login'))
+
+@app.route('/')
+def index():
+    if 'usuario' not in session:
+        return redirect(url_for('login'))
+    
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    
+    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos")
+    produtos = cursor.fetchall()
+    
+    valor_estoque = sum(max(0.0, float(p[4] or 0.0)) * float(p[6] or 0.0) for p in produtos)
+    total_cadastrados = len(produtos)
+    estoque_baixo = sum(1 for p in produtos if float(p[4] or 0.0) <= 2)
+
+    mes_atual_str = datetime.now().strftime("%Y-%m")
+    cursor.execute("SELECT ValorPago, DataCompra FROM Vendas")
+    todas_vendas = cursor.fetchall()
+    
+    receita_mes = 0.0
+    for v in todas_vendas:
+        val, data_str = v[0], v[1]
+        if val and data_str:
+            try:
+                dt = datetime.strptime(data_str.strip(), "%d/%m/%Y")
+                if dt.strftime("%Y-%m") == mes_atual_str:
+                    receita_mes += float(val)
+            except Exception:
+                pass
+
+    conexao.close()
+
+    return render_template_string(INDEX_HTML, 
+                                  produtos=produtos, 
+                                  total_cadastrados=total_cadastrados,
+                                  valor_estoque=valor_estoque,
+                                  receita_mes=receita_mes,
+                                  estoque_baixo=estoque_baixo)
+
+@app.route('/estoque/pdf')
+def gerar_pdf_estoque():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida FROM Produtos")
+    produtos = cursor.fetchall()
+    conexao.close()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
+    
+    styles = getSampleStyleSheet()
+    normal_style = styles['Normal']
+    normal_style.fontSize = 9
+    normal_style.leading = 12
+
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=normal_style,
+        fontSize=14,
+        leading=16,
+        fontName='Helvetica-Bold',
+        alignment=1
+    )
+
+    elements.append(Paragraph("<b>Lava Rápido Auto Lub - Relatório de Estoque</b>", title_style))
+    elements.append(Paragraph(f"Data de Emissão: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", title_style))
+    elements.append(Spacer(1, 15))
+
+    dados_tabela = [
+        [
+            Paragraph("<b>Código</b>", normal_style), 
+            Paragraph("<b>Produto / Insumo</b>", normal_style), 
+            Paragraph("<b>Descrição</b>", normal_style), 
+            Paragraph("<b>Preço Cobrado</b>", normal_style), 
+            Paragraph("<b>Estoque</b>", normal_style)
+        ]
+    ]
+
+    for p in produtos:
+        dados_tabela.append([
+            Paragraph(str(p[0]), normal_style),
+            Paragraph(str(p[1]), normal_style),
+            Paragraph(str(p[2] or '-'), normal_style),
+            Paragraph(f"R$ {p[3]:.2f}" if p[3] is not None else "R$ 0.00", normal_style),
+            Paragraph(f"{p[4]} {p[5] or 'un'}", normal_style)
+        ])
+
+    tabela = Table(dados_tabela, colWidths=[70, 120, 150, 90, 100])
+    tabela.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+        ('BOX', (0, 0), (-1, -1), 1, colors.black),
+        ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('PADDING', (0, 0), (-1, -1), 6),
+    ]))
+
+    elements.append(tabela)
+    doc.build(elements)
+    
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"relatorio_estoque_{datetime.now().strftime('%d-%m-%Y')}.pdf", mimetype='application/pdf')
+
+@app.route('/produto/novo', methods=['GET', 'POST'])
+def novo_produto():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    if request.method == 'POST':
+        id_prod = request.form['id']
+        nome = request.form['nome']
+        desc = request.form['desc']
+        preco = float(request.form['preco'] or 0)
+        qtd = float(request.form['qtd'] or 0)
+        unidade = request.form['unidade']
+        custo = float(request.form['custo'] or 0)
+
+        conexao = get_db_connection()
+        cursor = conexao.cursor()
+        try:
+            if DATABASE_URL:
+                cursor.execute("INSERT INTO Produtos (ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra) VALUES (%s, %s, %s, %s, %s, %s, %s)", 
+                               (id_prod, nome, desc, preco, qtd, unidade, custo))
+            else:
+                cursor.execute("INSERT INTO Produtos VALUES (?, ?, ?, ?, ?, ?, ?)", (id_prod, nome, desc, preco, qtd, unidade, custo))
+            conexao.commit()
+            flash('Produto cadastrado com sucesso!', 'success')
+        except Exception:
+            flash('Erro: Já existe um produto com este código!', 'error')
+        conexao.close()
+        return redirect(url_for('index'))
+    return render_template_string(FORM_PRODUTO_HTML, titulo="Novo Produto / Insumo", p=None)
+
+@app.route('/produto/editar/<id>', methods=['GET', 'POST'])
+def editar_produto(id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    if request.method == 'POST':
+        nome = request.form['nome']
+        desc = request.form['desc']
+        preco = float(request.form['preco'] or 0)
+        qtd = float(request.form['qtd'] or 0)
+        unidade = request.form['unidade']
+        custo = float(request.form['custo'] or 0)
+
+        if DATABASE_URL:
+            cursor.execute("UPDATE Produtos SET NomeProduto=%s, Descricao=%s, Preco=%s, QtdEstoque=%s, UnidadeMedida=%s, CustoCompra=%s WHERE ID=%s", 
+                           (nome, desc, preco, qtd, unidade, custo, id))
+        else:
+            cursor.execute("UPDATE Produtos SET NomeProduto=?, Descricao=?, Preco=?, QtdEstoque=?, UnidadeMedida=?, CustoCompra=? WHERE ID=?", 
+                           (nome, desc, preco, qtd, unidade, custo, id))
+        conexao.commit()
+        conexao.close()
+        flash('Produto atualizado com sucesso!', 'success')
+        return redirect(url_for('index'))
+    
+    if DATABASE_URL:
+        cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=%s", (id,))
+    else:
+        cursor.execute("SELECT ID, NomeProduto, Descricao, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos WHERE ID=?", (id,))
+    p = cursor.fetchone()
+    conexao.close()
+    return render_template_string(FORM_PRODUTO_HTML, titulo="Editar Produto / Insumo", p=p)
+
+@app.route('/produto/excluir/<id>')
+def excluir_produto(id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("DELETE FROM Produtos WHERE ID=%s" if DATABASE_URL else "DELETE FROM Produtos WHERE ID=?", (id,))
+    conexao.commit()
+    conexao.close()
+    flash('Produto excluído!', 'success')
+    return redirect(url_for('index'))
+
+@app.route('/clientes')
+def clientes():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ID, Nome, CnpjCpf, Telefone, ModeloMoto, Placa FROM Clientes ORDER BY Nome ASC")
+    clientes = cursor.fetchall()
+    conexao.close()
+    return render_template_string(CLIENTES_HTML, clientes=clientes)
+
+@app.route('/cliente/novo', methods=['GET', 'POST'])
+def novo_cliente():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    if request.method == 'POST':
+        nome = request.form['nome']
+        cnpj_cpf = request.form['cnpj_cpf']
+        inscricao_municipal = request.form['inscricao_municipal']
+        telefone = request.form['telefone']
+        email = request.form['email']
+        endereco = request.form['endereco']
+        cep = request.form['cep']
+        modelo = request.form['modelo']
+        placa = request.form['placa']
+
+        conexao = get_db_connection()
+        cursor = conexao.cursor()
+        if DATABASE_URL:
+            cursor.execute("INSERT INTO Clientes (Nome, CnpjCpf, InscricaoMunicipal, Telefone, Email, Endereco, Cep, ModeloMoto, Placa) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                           (nome, cnpj_cpf, inscricao_municipal, telefone, email, endereco, cep, modelo, placa))
+        else:
+            cursor.execute("INSERT INTO Clientes (Nome, CnpjCpf, InscricaoMunicipal, Telefone, Email, Endereco, Cep, ModeloMoto, Placa) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           (nome, cnpj_cpf, inscricao_municipal, telefone, email, endereco, cep, modelo, placa))
+        conexao.commit()
+        conexao.close()
+        flash('Cliente cadastrado com sucesso!', 'success')
+        return redirect(url_for('clientes'))
+    return render_template_string(FORM_CLIENTE_HTML, titulo="Novo Cliente", c=None)
+
+@app.route('/cliente/editar/<int:id>', methods=['GET', 'POST'])
+def editar_cliente(id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    if request.method == 'POST':
+        nome = request.form['nome']
+        cnpj_cpf = request.form['cnpj_cpf']
+        inscricao_municipal = request.form['inscricao_municipal']
+        telefone = request.form['telefone']
+        email = request.form['email']
+        endereco = request.form['endereco']
+        cep = request.form['cep']
+        modelo = request.form['modelo']
+        placa = request.form['placa']
+
+        if DATABASE_URL:
+            cursor.execute("UPDATE Clientes SET Nome=%s, CnpjCpf=%s, InscricaoMunicipal=%s, Telefone=%s, Email=%s, Endereco=%s, Cep=%s, ModeloMoto=%s, Placa=%s WHERE ID=%s",
+                           (nome, cnpj_cpf, inscricao_municipal, telefone, email, endereco, cep, modelo, placa, id))
+        else:
+            cursor.execute("UPDATE Clientes SET Nome=?, CnpjCpf=?, InscricaoMunicipal=?, Telefone=?, Email=?, Endereco=?, Cep=?, ModeloMoto=?, Placa=? WHERE ID=?",
+                           (nome, cnpj_cpf, inscricao_municipal, telefone, email, endereco, cep, modelo, placa, id))
+        conexao.commit()
+        conexao.close()
+        flash('Cliente atualizado com sucesso!', 'success')
+        return redirect(url_for('clientes'))
+
+    cursor.execute("SELECT ID, Nome, CnpjCpf, InscricaoMunicipal, Telefone, Email, Endereco, Cep, ModeloMoto, Placa FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT ID, Nome, CnpjCpf, InscricaoMunicipal, Telefone, Email, Endereco, Cep, ModeloMoto, Placa FROM Clientes WHERE ID=?", (id,))
+    c = cursor.fetchone()
+    conexao.close()
+    return render_template_string(FORM_CLIENTE_HTML, titulo="Editar Cliente", c=c)
+
+@app.route('/cliente/excluir/<int:id>')
+def excluir_cliente(id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    if DATABASE_URL:
+        cursor.execute("DELETE FROM Clientes WHERE ID=%s", (id,))
+        cursor.execute("DELETE FROM Vendas WHERE ClienteID=%s", (id,))
+    else:
+        cursor.execute("DELETE FROM Clientes WHERE ID=?", (id,))
+        cursor.execute("DELETE FROM Vendas WHERE ClienteID=?", (id,))
+    conexao.commit()
+    conexao.close()
+    flash('Cliente e histórico removidos!', 'success')
+    return redirect(url_for('clientes'))
+
+@app.route('/despesas')
+def despesas():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ID, Descricao, Categoria, Valor, DataDespesa, Observacao FROM Despesas")
+    despesas = cursor.fetchall()
+    conexao.close()
+    return render_template_string(DESPESAS_HTML, despesas=despesas)
+
+@app.route('/despesa/nova', methods=['GET', 'POST'])
+def nova_despesa():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    if request.method == 'POST':
+        desc = request.form['descricao']
+        cat = request.form['categoria']
+        valor = float(request.form['valor'] or 0)
+        data = request.form['data']
+        obs = request.form['obs']
+
+        conexao = get_db_connection()
+        cursor = conexao.cursor()
+        if DATABASE_URL:
+            cursor.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (%s, %s, %s, %s, %s)",
+                           (desc, cat, valor, data, obs))
+        else:
+            cursor.execute("INSERT INTO Despesas (Descricao, Categoria, Valor, DataDespesa, Observacao) VALUES (?, ?, ?, ?, ?)",
+                           (desc, cat, valor, data, obs))
+        conexao.commit()
+        conexao.close()
+        flash('Despesa registrada com sucesso!', 'success')
+        return redirect(url_for('despesas'))
+    hoje = datetime.now().strftime("%d/%m/%Y")
+    return render_template_string(FORM_DESPESA_HTML, hoje=hoje)
+
+@app.route('/despesa/excluir/<int:id>')
+def excluir_despesa(id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("DELETE FROM Despesas WHERE ID=%s" if DATABASE_URL else "DELETE FROM Despesas WHERE ID=?", (id,))
+    conexao.commit()
+    conexao.close()
+    flash('Despesa excluída!', 'success')
+    return redirect(url_for('despesas'))
+
+@app.route('/cliente/servico/<int:cliente_id>', methods=['GET', 'POST'])
+def lancamento_servico(cliente_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+
+    if request.method == 'POST':
+        try:
+            servico_desc = request.form.get('servico_desc', '')
+            codigo_tributacao = request.form.get('codigo_tributacao', '')
+            local_prestacao = request.form.get('local_prestacao', '')
+            valor_total = float(request.form.get('valor_total') or 0)
+            valor_pago = float(request.form.get('valor_pago') or 0)
+            forma_pagto = request.form.get('forma_pagto', 'Pix')
+            obs = request.form.get('obs', '')
+            data_compra = datetime.now().strftime("%d/%m/%Y")
+
+            cheque_numero = request.form.get('cheque_numero', '')
+            cheque_banco = request.form.get('cheque_banco', '')
+            cheque_agencia = request.form.get('cheque_agencia', '')
+            cheque_conta = request.form.get('cheque_conta', '')
+            cheque_vencimento = request.form.get('cheque_vencimento', '')
+
+            produtos_cod = request.form.getlist('produto_codigo[]')
+            produtos_qtd = request.form.getlist('produto_qtd[]')
+
+            custo_total_insumos = 0.0
+            detalhes_insumos_lista = []
+
+            for cod, qtd_str in zip(produtos_cod, produtos_qtd):
+                if cod and cod.strip():
+                    try:
+                        qtd_usada = float(qtd_str or 0)
+                        if DATABASE_URL:
+                            cursor.execute("SELECT NomeProduto, CustoCompra, UnidadeMedida FROM Produtos WHERE ID = %s", (cod,))
+                        else:
+                            cursor.execute("SELECT NomeProduto, CustoCompra, UnidadeMedida FROM Produtos WHERE ID = ?", (cod,))
+                        
+                        prod_info = cursor.fetchone()
+                        if prod_info:
+                            nome_prod, custo_unit, unidade = prod_info[0], float(prod_info[1] or 0.0), prod_info[2] or 'un'
+                            subtotal_custo = qtd_usada * custo_unit
+                            custo_total_insumos += subtotal_custo
+                            detalhes_insumos_lista.append(f"• {nome_prod}: {qtd_usada} {unidade} (Custo Unit: R$ {custo_unit:.2f} | Total: R$ {subtotal_custo:.2f})")
+
+                        if DATABASE_URL:
+                            cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - %s WHERE ID = %s", (qtd_usada, cod))
+                        else:
+                            cursor.execute("UPDATE Produtos SET QtdEstoque = QtdEstoque - ? WHERE ID = ?", (qtd_usada, cod))
+                    except Exception:
+                        pass
+
+            detalhes_insumos_str = "<br/>".join(detalhes_insumos_lista) if detalhes_insumos_lista else "Nenhum insumo lançado."
+            lucro_liquido = valor_total - custo_total_insumos
+
+            if DATABASE_URL:
+                cursor.execute("""
+                    INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, custo_total_insumos, detalhes_insumos_str, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
+            else:
+                cursor.execute("""
+                    INSERT INTO Vendas (ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (cliente_id, servico_desc, codigo_tributacao, local_prestacao, valor_total, valor_pago, data_compra, forma_pagto, obs, custo_total_insumos, detalhes_insumos_str, cheque_numero, cheque_banco, cheque_agencia, cheque_conta, cheque_vencimento))
+            
+            conexao.commit()
+            conexao.close()
+            
+            flash(f"🚀 <b>Serviço Lançado com Sucesso!</b><br/>💰 Valor Cobrado: R$ {valor_total:.2f} | 📦 Despesa/Custo de Insumos: R$ {custo_total_insumos:.2f} | ⭐ <b>Lucro Líquido: R$ {lucro_liquido:.2f}</b>", 'lucro')
+            return redirect(url_for('historico_cliente', cliente_id=cliente_id))
+        except Exception as e:
+            conexao.rollback()
+            conexao.close()
+            flash(f"Erro ao lançar serviço: {str(e)}", 'error')
+            return redirect(url_for('lancamento_servico', cliente_id=cliente_id))
+
+    cursor.execute("SELECT * FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cliente = cursor.fetchone()
+    cursor.execute("SELECT ID, NomeProduto, Preco, QtdEstoque, UnidadeMedida, CustoCompra FROM Produtos")
+    produtos = cursor.fetchall()
+    conexao.close()
+    return render_template_string(LANCAMENTO_SERVICO_HTML, cliente=cliente, produtos=produtos)
+
+@app.route('/cliente/historico/<int:cliente_id>')
+def historico_cliente(cliente_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT * FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cliente = cursor.fetchone()
+    
+    query_vendas = """
+        SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento 
+        FROM Vendas WHERE ClienteID=%s ORDER BY ID DESC
+    """ if DATABASE_URL else """
+        SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra, FormaPagamento, Observacao, CustoInsumos, DetalhesInsumos, ChequeNumero, ChequeBanco, ChequeAgencia, ChequeConta, ChequeVencimento 
+        FROM Vendas WHERE ClienteID=? ORDER BY ID DESC
+    """
+    cursor.execute(query_vendas, (cliente_id,))
+    vendas = cursor.fetchall()
+    conexao.close()
+    return render_template_string(HISTORICO_HTML, cliente=cliente, vendas=vendas)
+
+@app.route('/venda/excluir/<int:id>')
+def excluir_venda(id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ClienteID FROM Vendas WHERE ID=%s" if DATABASE_URL else "SELECT ClienteID FROM Vendas WHERE ID=?", (id,))
+    res = cursor.fetchone()
+    cliente_id = res[0] if res else None
+    cursor.execute("DELETE FROM Vendas WHERE ID=%s" if DATABASE_URL else "DELETE FROM Vendas WHERE ID=?", (id,))
+    conexao.commit()
+    conexao.close()
+    flash('Lançamento excluído!', 'success')
+    if cliente_id:
+        return redirect(url_for('historico_cliente', cliente_id=cliente_id))
+    return redirect(url_for('clientes'))
+
+@app.route('/venda/pdf-custos/<int:venda_id>')
+def gerar_pdf_custos_venda(venda_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    
+    cursor.execute("SELECT ID, ClienteID, Servico, ValorTotal, CustoInsumos, DetalhesInsumos, DataCompra FROM Vendas WHERE ID=%s" if DATABASE_URL else "SELECT ID, ClienteID, Servico, ValorTotal, CustoInsumos, DetalhesInsumos, DataCompra FROM Vendas WHERE ID=?", (venda_id,))
+    venda = cursor.fetchone()
+    
+    if not venda:
+        conexao.close()
+        flash('Venda não encontrada!', 'error')
+        return redirect(url_for('clientes'))
+
+    cursor.execute("SELECT Nome, CnpjCpf, Telefone FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT Nome, CnpjCpf, Telefone FROM Clientes WHERE ID=?", (venda[1],))
+    cliente = cursor.fetchone()
+    conexao.close()
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
+    
+    styles = getSampleStyleSheet()
+    normal_style = styles['Normal']
+    normal_style.fontSize = 10
+    normal_style.leading = 14
+
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=normal_style,
+        fontSize=14,
+        leading=16,
+        fontName='Helvetica-Bold',
+        alignment=1
+    )
+
+    elements.append(Paragraph("<b>Lava Rápido Auto Lub - Relatório de Custos da Lavação</b>", title_style))
+    elements.append(Paragraph(f"Ordem de Serviço (OS): #{venda[0]} | Data: {venda[6]}", title_style))
+    elements.append(Spacer(1, 15))
+
+    cliente_nome = cliente[0] if cliente else "Não informado"
+    cliente_doc = cliente[1] if cliente else "-"
+    
+    elements.append(Paragraph(f"<b>Cliente:</b> {cliente_nome} (CNPJ/CPF: {cliente_doc})", normal_style))
+    elements.append(Paragraph(f"<b>Serviço Prestado:</b> {venda[2]}", normal_style))
+    elements.append(Spacer(1, 10))
+
+    detalhes_texto = venda[5].replace("<br/>", "\n") if venda[5] else "Nenhum insumo detalhado."
+    
+    resumo_data = [
+        [Paragraph("<b>Detalhamento dos Produtos e Insumos Gastos</b>", normal_style)],
+        [Paragraph(f"{detalhes_texto.replace(chr(10), '<br/>')}", normal_style)],
+        [Paragraph(f"<b>Valor Cobrado do Serviço:</b> R$ {venda[3]:.2f}<br/><b>Custo Total de Insumos:</b> R$ {(venda[4] or 0.0):.2f}<br/><b>Lucro Líquido da OS:</b> <b>R$ {venda[3] - (venda[4] or 0.0):.2f}</b>", normal_style)]
+    ]
+    t_resumo = Table(resumo_data, colWidths=[530])
+    t_resumo.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (0,0), colors.lightgrey),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.whitesmoke),
+        ('PADDING', (0,0), (-1,-1), 8),
+    ]))
+    
+    elements.append(t_resumo)
+    doc.build(elements)
+    
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"custos_lavagem_os_{venda_id}.pdf", mimetype='application/pdf')
+
+@app.route('/cliente/pdf/<int:cliente_id>')
+def gerar_pdf_cliente(cliente_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT * FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT * FROM Clientes WHERE ID=?", (cliente_id,))
+    cliente = cursor.fetchone()
+    cursor.execute("SELECT ID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento FROM Vendas WHERE ClienteID=%s" if DATABASE_URL else "SELECT ID, Servico, ValorTotal, ValorPago, DataCompra, FormaPagamento FROM Vendas WHERE ClienteID=?", (cliente_id,))
+    vendas = cursor.fetchall()
+    conexao.close()
+
+    buffer = BytesIO()
+    p = canvas.Canvas(buffer, pagesize=letter)
+    p.drawString(100, 750, f"Extrato de Conta - {cliente[1]}")
+    p.drawString(100, 730, f"CNPJ/CPF: {cliente[2] or '-'} | Telefone: {cliente[4] or '-'}")
+    
+    y = 690
+    for v in vendas:
+        p.drawString(100, y, f"Data: {v[4]} | Servico: {v[1]} | Total: R$ {v[2]:.2f} | Pago: R$ {v[3]:.2f}")
+        y -= 20
+        if y < 50:
+            p.showPage()
+            y = 750
+
+    p.save()
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"extrato_{cliente[1]}.pdf", mimetype='application/pdf')
+
+@app.route('/gerar-nf/<int:venda_id>')
+def gerar_nf(venda_id):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    cursor.execute("SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra FROM Vendas WHERE ID=%s" if DATABASE_URL else "SELECT ID, ClienteID, Servico, CodigoTributacao, LocalPrestacao, ValorTotal, ValorPago, DataCompra FROM Vendas WHERE ID=?", (venda_id,))
+    venda = cursor.fetchone()
+    
+    if not venda:
+        conexao.close()
+        flash('Venda/OS não encontrada!', 'error')
+        return redirect(url_for('clientes'))
+        
+    cursor.execute("SELECT ID, Nome, CnpjCpf, InscricaoMunicipal, Telefone, Email, Endereco, Cep FROM Clientes WHERE ID=%s" if DATABASE_URL else "SELECT ID, Nome, CnpjCpf, InscricaoMunicipal, Telefone, Email, Endereco, Cep FROM Clientes WHERE ID=?", (venda[1],))
+    cliente = cursor.fetchone()
+    conexao.close()
+
+    emitente = {
+        "nome": "61.527.886 LUCIANO JOSE FREIRE TEIXEIRA",
+        "cnpj": "61.527.886/0001-10",
+        "fone": "(37) 3322-8007",
+        "email": "LJ9219556LU@GMAIL.COM",
+        "endereco": "RODOVIA MG 050 KM215, S/N, CORREGO FUNDO - MG",
+        "cep": "35568-000"
+    }
+    
+    tomador = {
+        "nome": cliente[1] if cliente else "CLIENTE NÃO INFORMADO",
+        "cnpj": cliente[2] if cliente and cliente[2] else "N/D",
+        "insc_mun": cliente[3] if cliente and cliente[3] else "-",
+        "fone": cliente[4] if cliente and cliente[4] else "(37) 0000-0000",
+        "email": cliente[5] if cliente and cliente[5] else "contato@autolub.com",
+        "endereco": cliente[6] if cliente and cliente[6] else "Córrego Fundo - MG",
+        "cep": cliente[7] if cliente and cliente[7] else "35568-000"
+    }
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
+    
+    styles = getSampleStyleSheet()
+    normal_style = styles['Normal']
+    normal_style.fontSize = 8
+    normal_style.leading = 10
+
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=normal_style,
+        fontSize=10,
+        leading=12,
+        fontName='Helvetica-Bold',
+        alignment=1
+    )
+
+    elements.append(Paragraph("<b>PREFEITURA MUNICIPAL DE CÓRREGO FUNDO</b>", title_style))
+    elements.append(Paragraph("DANFSe v1.0 - Documento Auxiliar da NFS-e", title_style))
+    elements.append(Spacer(1, 10))
+
+    data_emissao = venda[7] if venda[7] else datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    cabecalho_data = [
+        [Paragraph(f"<b>Chave de Acesso da NFS-e:</b><br/>31199552261527886000110000000000001726050{venda[0]:04d}", normal_style)],
+        [Paragraph(f"<b>Número da NFS-e:</b> {venda[0]} &nbsp;&nbsp;&nbsp;&nbsp; <b>Competência:</b> {data_emissao} &nbsp;&nbsp;&nbsp;&nbsp; <b>Emissão:</b> {data_emissao}", normal_style)]
+    ]
+    t_cabecalho = Table(cabecalho_data, colWidths=[530])
+    t_cabecalho.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (-1,-1), colors.whitesmoke),
+        ('PADDING', (0,0), (-1,-1), 6),
+    ]))
+    elements.append(t_cabecalho)
+    elements.append(Spacer(1, 10))
+
+    emit_data = [
+        [Paragraph("<b>EMITENTE DA NFS-e (Prestador do Serviço)</b>", normal_style)],
+        [Paragraph(f"<b>Nome/Empresa:</b> {emitente['nome']}<br/><b>CNPJ/CPF:</b> {emitente['cnpj']} &nbsp;&nbsp; <b>Telefone:</b> {emitente['fone']}<br/><b>Endereço:</b> {emitente['endereco']} &nbsp;&nbsp; <b>CEP:</b> {emitente['cep']}<br/><b>E-mail:</b> {emitente['email']}", normal_style)]
+    ]
+    t_emit = Table(emit_data, colWidths=[530])
+    t_emit.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (0,0), colors.lightgrey),
+        ('PADDING', (0,0), (-1,-1), 5),
+    ]))
+    elements.append(t_emit)
+    elements.append(Spacer(1, 10))
+
+    tom_data = [
+        [Paragraph("<b>TOMADOR DO SERVIÇO (Cliente)</b>", normal_style)],
+        [Paragraph(f"<b>Nome/Empresa:</b> {tomador['nome']}<br/><b>CNPJ/CPF/NIF:</b> {tomador['cnpj']} &nbsp;&nbsp; <b>Inscrição Municipal:</b> {tomador['insc_mun']} &nbsp;&nbsp; <b>Telefone:</b> {tomador['fone']}<br/><b>Endereço:</b> {tomador['endereco']} &nbsp;&nbsp; <b>CEP:</b> {tomador['cep']}<br/><b>E-mail:</b> {tomador['email']}", normal_style)]
+    ]
+    t_tom = Table(tom_data, colWidths=[530])
+    t_tom.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (0,0), colors.lightgrey),
+        ('PADDING', (0,0), (-1,-1), 5),
+    ]))
+    elements.append(t_tom)
+    elements.append(Spacer(1, 10))
+
+    cod_trib = venda[3] if venda[3] else "14.01.01 - Lubrificação, limpeza, lustração..."
+    loc_prest = venda[4] if venda[4] else "Córrego Fundo - MG"
+    serv_data = [
+        [Paragraph("<b>SERVIÇO PRESTADO</b>", normal_style)],
+        [Paragraph(f"<b>Código de Tributação Nacional:</b> {cod_trib}<br/><b>Descrição do Serviço:</b> {venda[2]}<br/><b>Local da Prestação:</b> {loc_prest}", normal_style)]
+    ]
+    t_serv = Table(serv_data, colWidths=[530])
+    t_serv.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (0,0), colors.lightgrey),
+        ('PADDING', (0,0), (-1,-1), 5),
+    ]))
+    elements.append(t_serv)
+    elements.append(Spacer(1, 10))
+
+    val_total = venda[5] if venda[5] else 0.0
+    val_data = [
+        [Paragraph("<b>VALOR TOTAL DA NFS-E</b>", normal_style)],
+        [Paragraph(f"<b>Operação Tributável:</b> ISSQN - Operação Tributável<br/><b>Valor do Serviço:</b> R$ {val_total:.2f} &nbsp;&nbsp;&nbsp;&nbsp; <b>Descontos:</b> R$ 0,00 &nbsp;&nbsp;&nbsp;&nbsp; <b>Valor Líquido:</b> <b>R$ {val_total:.2f}</b>", normal_style)]
+    ]
+    t_val = Table(val_data, colWidths=[530])
+    t_val.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 1, colors.black),
+        ('BACKGROUND', (0,0), (0,0), colors.lightgrey),
+        ('PADDING', (0,0), (-1,-1), 5),
+    ]))
+    elements.append(t_val)
+
+    doc.build(elements)
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"nota_fiscal_{venda_id}.pdf", mimetype='application/pdf')
+
+@app.route('/dashboard', methods=['GET', 'POST'])
+def dashboard():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    
+    mes_selecionado = request.args.get('mes', datetime.now().strftime("%Y-%m"))
+    
+    conexao = get_db_connection()
+    cursor = conexao.cursor()
+    
+    cursor.execute("SELECT ValorPago, CustoInsumos, DataCompra FROM Vendas")
+    vendas = cursor.fetchall()
+    
+    cursor.execute("SELECT Valor, DataDespesa FROM Despesas")
+    despesas = cursor.fetchall()
+    conexao.close()
+    
+    total_receitas_mes = 0.0
+    total_custo_insumos_mes = 0.0
+    total_despesas_mes = 0.0
+    
+    for v in vendas:
+        val_pago, custo_ins, data_str = v[0], v[1], v[2]
+        if data_str:
+            try:
+                dt = datetime.strptime(data_str.strip(), "%d/%m/%Y")
+                if dt.strftime("%Y-%m") == mes_selecionado:
+                    total_receitas_mes += float(val_pago or 0.0)
+                    total_custo_insumos_mes += float(custo_ins or 0.0)
+            except Exception:
+                pass
+
+    for d in despesas:
+        val, data_str = d[0], d[1]
+        if val and data_str:
+            try:
+                dt = datetime.strptime(data_str.strip(), "%d/%m/%Y")
+                if dt.strftime("%Y-%m") == mes_selecionado:
+                    total_despesas_mes += float(val)
+            except Exception:
+                pass
+
+    saldo_liquido_mes = total_receitas_mes - total_custo_insumos_mes - total_despesas_mes
+
+    anos_meses = [
+        ("2026-01", "Janeiro/2026"), ("2026-02", "Fevereiro/2026"), ("2026-03", "Março/2026"),
+        ("2026-04", "Abril/2026"), ("2026-05", "Maio/2026"), ("2026-06", "Junho/2026"),
+        ("2026-07", "Julho/2026"), ("2026-08", "Agosto/2026"), ("2026-09", "Setembro/2026"),
+        ("2026-10", "Outubro/2026"), ("2026-11", "Novembro/2026"), ("2026-12", "Dezembro/2026"),
+        ("2025-01", "Janeiro/2025"), ("2025-02", "Fevereiro/2025"), ("2025-03", "Março/2025"),
+        ("2025-04", "Abril/2025"), ("2025-05", "Maio/2025"), ("2025-06", "Junho/2025"),
+        ("2025-07", "Julho/2025"), ("2025-08", "Agosto/2025"), ("2025-09", "Setembro/2025"),
+        ("2025-10", "Outubro/2025"), ("2025-11", "Novembro/2025"), ("2025-12", "Dezembro/2025")
+    ]
+
+    DASHBOARD_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
+    <div class="space-y-6">
+        <div class="flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-white"><i class="fa-solid fa-chart-line text-cyan-400 mr-2"></i> Dashboard Financeiro</h1>
+            <form method="GET" class="flex items-center space-x-2">
+                <label class="text-sm text-slate-300 font-medium">Mês:</label>
+                <select name="mes" onchange="this.form.submit()" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-white text-sm">
+                    {% for am, nome_am in anos_meses %}
+                    <option value="{{ am }}" {% if mes_selecionado == am %}selected{% endif %}>{{ nome_am }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Receitas do Mês</p>
+                <p class="text-2xl font-bold text-emerald-400 mt-2">{{ moeda_pt(total_receitas_mes) }}</p>
+            </div>
+            <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Custo de Insumos Gastos</p>
+                <p class="text-2xl font-bold text-amber-400 mt-2">{{ moeda_pt(total_custo_insumos_mes) }}</p>
+            </div>
+            <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Despesas Operacionais</p>
+                <p class="text-2xl font-bold text-red-400 mt-2">{{ moeda_pt(total_despesas_mes) }}</p>
+            </div>
+            <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Lucro Líquido Real</p>
+                <p class="text-2xl font-extrabold {% if saldo_liquido_mes >= 0 %}text-cyan-400{% else %}text-red-400{% endif %} mt-2">{{ moeda_pt(saldo_liquido_mes) }}</p>
+            </div>
+        </div>
+    </div>
+    """)
+    return render_template_string(DASHBOARD_HTML, total_receitas_mes=total_receitas_mes, total_custo_insumos_mes=total_custo_insumos_mes, total_despesas_mes=total_despesas_mes, saldo_liquido_mes=saldo_liquido_mes, mes_selecionado=mes_selecionado, anos_meses=anos_meses)
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
