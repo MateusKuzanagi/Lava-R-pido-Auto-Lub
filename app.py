@@ -742,11 +742,11 @@ HISTORICO_HTML = BASE_LAYOUT.replace("{% block content %}{% endblock %}", """
                     </td>
                     <td class="p-4 text-slate-300">{{ moeda_pt(v[5]) }}</td>
                     <td class="p-4 text-red-400 font-semibold">{{ moeda_pt(v[10] or 0.0) }}</td>
-                    <td class="p-4 text-cyan-400 font-bold">{{ moeda_pt(v[5] - (v[10] or 0.0)) }}</td>
+                    <td class="p-4 text-cyan-400 font-bold">{{ moeda_pt((v[5]|float) - ((v[10] or 0)|float)) }}</td>
                     <td class="p-4">
                         <span class="text-emerald-400 font-semibold">{{ moeda_pt(v[6]) }}</span>
-                        {% if (v[5] - v[6]) > 0 %}
-                            <br/><span class="text-xs text-red-400 font-bold">Devendo: {{ moeda_pt(v[5] - v[6]) }}</span>
+                        {% if ((v[5]|float) - (v[6]|float)) > 0 %}
+                            <br/><span class="text-xs text-red-400 font-bold">Devendo: {{ moeda_pt((v[5]|float) - (v[6]|float)) }}</span>
                         {% endif %}
                     </td>
                     <td class="p-4 text-center space-y-1">
